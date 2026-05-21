@@ -1,0 +1,371 @@
+"""
+run_benchmark.py — main orchestration CLI for the aibomgen-cli evaluation framework.
+
+Subcommands:
+  run-local      Run all jobs on the current machine (parallel via --workers).
+  status         Show completion status of a run.
+  aggregate      Run the scoring aggregation pipeline for a completed run.
+
+Quick start:
+  uv run eval run-local --run-id my-run-001             # sequential
+  uv run eval run-local --run-id my-run-001 --workers 4  # parallel
+  uv run eval aggregate --run-id my-run-001
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any
+
+import click
+import yaml
+from rich.console import Console
+from rich.table import Table
+
+EVAL_ROOT = Path(__file__).parent.parent
+CONFIG_PATH = EVAL_ROOT / "orchestrator" / "config.yaml"
+DEFAULT_RESULTS_DIR = EVAL_ROOT / "results" / "runs"
+
+console = Console()
+
+
+# ================================================================== #
+# CLI root                                                             #
+# ================================================================== #
+
+@click.group()
+def cli() -> None:
+    """aibomgen-cli evaluation framework."""
+
+
+# ================================================================== #
+# run-local                                                            #
+# ================================================================== #
+
+@cli.command("run-local")
+@click.option("--run-id",    default=None, help="Run ID (auto-generated if not set).")
+@click.option("--results-dir", default=str(DEFAULT_RESULTS_DIR), show_default=True)
+@click.option("--tools",     default=None)
+@click.option("--tasks",     default=None)
+@click.option("--skip-done/--no-skip-done", default=True, show_default=True)
+@click.option(
+    "--workers", default=1, show_default=True,
+    help="Number of parallel workers (default 1 = sequential). Set to nproc for full parallelism."
+)
+def run_local(
+    run_id: str | None,
+    results_dir: str,
+    tools: str | None,
+    tasks: str | None,
+    skip_done: bool,
+    workers: int,
+) -> None:
+    """Run all jobs on the current machine. Use --workers N to run in parallel."""
+    from orchestrator.checkpoint import Checkpoint
+
+    if run_id is None:
+        run_id = _next_run_id(Path(results_dir))
+        console.print(f"[dim]Auto run-id: {run_id}[/dim]")
+
+    cfg = _load_config()
+    jobs = _build_jobs(cfg, tools, tasks)
+
+    run_dir = Path(results_dir) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write index and manifest
+    with open(run_dir / "job_index.json", "w") as f:
+        json.dump(jobs, f, indent=2)
+
+    checkpoint = Checkpoint(run_dir / "checkpoint.json")
+
+    pending = [
+        job for job in jobs
+        if not (skip_done and checkpoint.is_done(
+            job["tool"], job["task"], job["dataset"], job["input_spec"]
+        ))
+    ]
+    skipped = len(jobs) - len(pending)
+
+    console.print(
+        f"[bold]Run {run_id}[/bold] — {len(jobs)} jobs "
+        f"({skipped} skipped, {len(pending)} pending, {workers} worker(s))"
+    )
+
+    done = failed = 0
+
+    if workers <= 1:
+        # Sequential path — simpler output, easier to read logs
+        for job in pending:
+            result = _run_job(job, run_dir, cfg)
+            status = "done" if result.success else "failed"
+            checkpoint.mark_done(job["tool"], job["task"], job["dataset"], job["input_spec"], status)
+
+            if result.success:
+                done += 1
+                console.print(f"  [green]✓[/green] {_job_label(job)} ({result.duration_seconds:.1f}s)")
+            else:
+                failed += 1
+                console.print(f"  [red]✗[/red] {_job_label(job)} — {result.error_message or 'unknown error'}")
+    else:
+        # Parallel path — results arrive out of order
+        cfg_snapshot = _load_config()  # each subprocess gets its own copy
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_run_job, job, run_dir, cfg_snapshot): job for job in pending}
+            for future in as_completed(futures):
+                job = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"  [red]✗[/red] {_job_label(job)} — worker exception: {exc}")
+                    failed += 1
+                    checkpoint.mark_done(job["tool"], job["task"], job["dataset"], job["input_spec"], "failed")
+                    continue
+
+                status = "done" if result.success else "failed"
+                checkpoint.mark_done(job["tool"], job["task"], job["dataset"], job["input_spec"], status)
+
+                if result.success:
+                    done += 1
+                    console.print(f"  [green]✓[/green] {_job_label(job)} ({result.duration_seconds:.1f}s)")
+                else:
+                    failed += 1
+                    console.print(f"  [red]✗[/red] {_job_label(job)} — {result.error_message or 'unknown error'}")
+
+    console.print(
+        f"\n[bold]Done:[/bold] {done} succeeded, {failed} failed, {skipped} skipped."
+    )
+
+
+# ================================================================== #
+# status                                                               #
+# ================================================================== #
+
+@cli.command("status")
+@click.option("--run-id", default=None, help="Run ID (defaults to latest run).")
+@click.option("--results-dir", default=str(DEFAULT_RESULTS_DIR), show_default=True)
+def status(run_id: str | None, results_dir: str) -> None:
+    """Show completion status of a run."""
+    from orchestrator.checkpoint import Checkpoint
+
+    if run_id is None:
+        run_id = _latest_run_id(Path(results_dir))
+        if run_id is None:
+            click.echo("No runs found.", err=True)
+            sys.exit(1)
+        console.print(f"[dim]Using latest run: {run_id}[/dim]")
+
+    run_dir = Path(results_dir) / run_id
+    checkpoint = Checkpoint(run_dir / "checkpoint.json")
+    stats = checkpoint.stats()
+
+    index_path = run_dir / "job_index.json"
+    total_jobs = "?"
+    if index_path.exists():
+        with open(index_path) as f:
+            total_jobs = str(len(json.load(f)))
+
+    table = Table(title=f"Run {run_id}")
+    table.add_column("Metric")
+    table.add_column("Value")
+    table.add_row("Total jobs (index)", total_jobs)
+    table.add_row("Completed (checkpoint)", str(stats["done"]))
+    table.add_row("Failed (checkpoint)", str(stats["failed"]))
+    table.add_row("Total recorded", str(stats["total"]))
+    console.print(table)
+
+
+# ================================================================== #
+# aggregate                                                            #
+# ================================================================== #
+
+@cli.command("aggregate")
+@click.option("--run-id", default=None, help="Run ID (defaults to latest run).")
+@click.option("--results-dir", default=str(DEFAULT_RESULTS_DIR), show_default=True)
+def aggregate(run_id: str | None, results_dir: str) -> None:
+    """Run the scoring aggregation pipeline for a completed run."""
+    if run_id is None:
+        run_id = _latest_run_id(Path(results_dir))
+        if run_id is None:
+            click.echo("No runs found.", err=True)
+            sys.exit(1)
+        console.print(f"[dim]Using latest run: {run_id}[/dim]")
+
+    from scoring.aggregate import main as agg_main
+    from analysis.report import main as report_main
+
+    # Invoke via Click's standalone mode
+    agg_main.main(["--run-id", run_id, "--results-dir", results_dir], standalone_mode=False)
+    report_main.main(["--run-id", run_id], standalone_mode=False)
+
+
+# ================================================================== #
+# Internal helpers                                                     #
+# ================================================================== #
+
+# ================================================================== #
+# Run-ID helpers                                                       #
+# ================================================================== #
+
+_RUN_ID_RE = re.compile(r"^eval-(\d+)$")
+
+
+def _next_run_id(results_dir: Path) -> str:
+    """Return the next sequential eval-NNN run ID based on existing run directories."""
+    max_n = 0
+    if results_dir.exists():
+        for d in results_dir.iterdir():
+            m = _RUN_ID_RE.match(d.name)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+    return f"eval-{max_n + 1:03d}"
+
+
+def _latest_run_id(results_dir: Path) -> str | None:
+    """Return the most recently modified run directory name, or None."""
+    if not results_dir.exists():
+        return None
+    dirs = [d for d in results_dir.iterdir() if d.is_dir()]
+    if not dirs:
+        return None
+    return max(dirs, key=lambda d: d.stat().st_mtime).name
+
+
+def _load_config() -> dict:
+    with open(CONFIG_PATH) as f:
+        return yaml.safe_load(f)
+
+
+def _build_jobs(
+    cfg: dict, tool_filter: str | None, task_filter: str | None
+) -> list[dict[str, Any]]:
+    """
+    Build a flat list of job dicts: {tool, task, dataset, input_spec, ...}.
+    Each job is one (tool × task × dataset × input_item) combination.
+    """
+    tool_ids = set(tool_filter.split(",")) if tool_filter else None
+    task_ids = set(task_filter.split(",")) if task_filter else None
+
+    jobs: list[dict] = []
+    tasks_cfg = cfg.get("tasks", {})
+    tools_cfg = cfg.get("tools", {})
+    hf_token_env = cfg.get("hf", {}).get("token_env", "HF_TOKEN")
+
+    for tool_id, tool_cfg in tools_cfg.items():
+        if tool_ids and tool_id not in tool_ids:
+            continue
+        if tool_cfg.get("optional") and not tool_cfg.get("tasks"):
+            continue  # skip fully excluded tools (e.g. cisco-aibom)
+
+        for task_id in tool_cfg.get("tasks", []):
+            if task_ids and task_id not in task_ids:
+                continue
+            task_cfg = tasks_cfg.get(task_id)
+            if not task_cfg:
+                continue
+
+            for dataset in task_cfg.get("datasets", []):
+                dataset_id = dataset["id"]
+                dataset_type = dataset.get("type", "source-dir")
+                ground_truth = dataset.get("ground_truth", "")
+
+                input_items = _resolve_inputs(dataset, dataset_type)
+                for item in input_items:
+                    jobs.append({
+                        "tool":            tool_id,
+                        "task":            task_id,
+                        "dataset":         dataset_id,
+                        "input_spec":      item,
+                        "ground_truth":    ground_truth,
+                        "hf_token_env":    hf_token_env,
+                        "tool_config":     tool_cfg,
+                        "task_config":     {**task_cfg, "id": task_id, "current_dataset_ground_truth": ground_truth},
+                    })
+
+    return jobs
+
+
+def _resolve_inputs(dataset: dict, dataset_type: str) -> list[str]:
+    """
+    Resolve a dataset spec to a list of input_spec strings.
+
+    model-id-list           → list of model ID strings from the JSON file
+    model-id-list-labeled   → list of model ID strings from inputs[*].id
+    source-dir              → [path] (single directory scan)
+    """
+    path = dataset.get("path", "")
+
+    if dataset_type == "source-dir":
+        return [path]
+
+    if dataset_type in ("model-id-list", "model-id-list-labeled"):
+        json_path = EVAL_ROOT / path
+        try:
+            with open(json_path) as f:
+                data = json.load(f)
+        except Exception:
+            return []
+
+        if dataset_type == "model-id-list":
+            return data.get("models", [])
+        else:
+            return [item["id"] for item in data.get("inputs", [])]
+
+    return [path]
+
+
+def _run_job(job: dict, run_dir: Path, cfg: dict) -> Any:
+    """Instantiate the correct runner and execute one job."""
+    from runners import REGISTRY
+    from runners.base_runner import input_slug
+
+    tool_id = job["tool"]
+    runner_cls = REGISTRY.get(tool_id)
+    if runner_cls is None:
+        console.print(f"[yellow]No runner for tool '{tool_id}' — skipping.[/yellow]")
+        # Return a minimal dummy result
+        from runners.base_runner import RunResult
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        return RunResult(
+            run_id=run_dir.name, tool=tool_id, tool_version="unknown",
+            tool_commit="unknown", task=job["task"], dataset=job["dataset"],
+            input_spec=job["input_spec"], timestamp_start=now, timestamp_end=now,
+            duration_seconds=0, peak_memory_mb=None, exit_code=-1, success=False,
+            retries=0, raw_output_path=None, error_message="No runner registered",
+            scores={},
+        )
+
+    runner = runner_cls(job["tool_config"], job["task_config"])
+    hf_token = os.environ.get(job.get("hf_token_env", "HF_TOKEN"))
+
+    result = runner.run(
+        run_id=run_dir.name,
+        input_spec=job["input_spec"],
+        dataset_id=job["dataset"],
+        results_dir=run_dir.parent,
+        hf_token=hf_token,
+    )
+
+    output_dir = (
+        run_dir
+        / tool_id
+        / job["task"]
+        / job["dataset"]
+        / input_slug(job["input_spec"])
+    )
+    result.write(output_dir)
+    return result
+
+
+def _job_label(job: dict) -> str:
+    return f"{job['tool']} / {job['task']} / {job['dataset']} / {job['input_spec'][:40]}"
+
+
+if __name__ == "__main__":
+    cli()

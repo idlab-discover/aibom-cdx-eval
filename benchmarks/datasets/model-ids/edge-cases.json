@@ -1,0 +1,17 @@
+{
+  "_comment": "Edge-case model IDs to probe error handling, unusual formats, and boundary conditions. Used in T1.",
+  "_notes": {
+    "no-org-prefix": "Some tools may not handle bare model names (no org/) correctly",
+    "nonexistent": "Tools must fail gracefully on 404 — check exit code handling",
+    "deep-path": "Unusual org/model/revision path should not crash parsers",
+    "very-long-name": "Stress-test field-length handling"
+  },
+  "models": [
+    "bert-base-uncased",
+    "nonexistent-org-xyz/nonexistent-model-abc-12345",
+    "google-bert/bert-base-uncased",
+    "microsoft/phi-4",
+    "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+    "Xenova/gpt2"
+  ]
+}

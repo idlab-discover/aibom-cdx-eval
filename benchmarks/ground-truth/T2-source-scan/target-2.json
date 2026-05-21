@@ -1,0 +1,17 @@
+{
+  "_comment": "Ground truth for target-2. Source: aibomgen-cli/targets/target-2/src/",
+  "_method": "Manual annotation. use_model.py uses from_pretrained; use_dataset.py uses load_dataset.",
+  "_notes": {
+    "templates/model-card-example": "Unusual format — org=templates; some scanners may reject as invalid HF ID. Included as detectable=true since it follows org/model format and is literally in the source."
+  },
+  "target": "target-2",
+  "target_path": "targets/target-2",
+  "models": [
+    { "id": "WiebeVandendriessche/model-card-example", "detectable": true,  "pattern": "AutoModel.from_pretrained" },
+    { "id": "templates/model-card-example",            "detectable": true,  "pattern": "AutoTokenizer.from_pretrained", "edge_case": true }
+  ],
+  "datasets": [
+    { "id": "wmt14/de-en",  "detectable": true, "pattern": "load_dataset" },
+    { "id": "glue/mrpc",    "detectable": true, "pattern": "load_dataset" }
+  ]
+}

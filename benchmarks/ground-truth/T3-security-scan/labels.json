@@ -1,0 +1,16 @@
+{
+  "_comment": "Ground truth for T3 security scanning. Labels for each model ID in the test set.",
+  "labels": [
+    {
+      "id": "mcpotato/42-eicar-street",
+      "malicious": true,
+      "severity": "critical",
+      "description": "EICAR antivirus test string embedded in a pickle file — documented HF Hub test model for security scanners"
+    },
+    { "id": "google-bert/bert-base-uncased",           "malicious": false },
+    { "id": "openai-community/gpt2",                   "malicious": false },
+    { "id": "distilbert/distilbert-base-uncased",      "malicious": false },
+    { "id": "BAAI/bge-small-en-v1.5",                  "malicious": false },
+    { "id": "sentence-transformers/all-MiniLM-L6-v2",  "malicious": false }
+  ]
+}

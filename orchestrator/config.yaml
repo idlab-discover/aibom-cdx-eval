@@ -1,0 +1,194 @@
+# ============================================================
+# aibomgen-cli evaluation framework — orchestrator configuration
+# ============================================================
+
+run:
+  base_output_dir: "results/runs"
+  max_retries: 3
+  retry_delay_seconds: 30
+  timeout_seconds: 1800     # 30 min per job; override per-tool below
+
+hf:
+  token_env: "HF_TOKEN"     # export HF_TOKEN=hf_... before running
+
+# ----------------------------------------------------------
+# Tool registry
+# Each tool entry defines runtime, path, and which tasks it participates in.
+# ----------------------------------------------------------
+tools:
+
+  aibomgen-cli:
+    id: aibomgen-cli
+    display_name: "aibomgen-cli"
+    runtime: binary
+    binary: "/home/ubuntu/go/bin/aibomgen-cli"
+    tasks: ["T1", "T2", "T3"]
+    output_format: cyclonedx-json
+    optional: false
+
+  aibom-generator:
+    id: aibom-generator
+    display_name: "aibom-generator (OWASP)"
+    runtime: uv
+    path: "/home/ubuntu/tools/aibom-generator"
+    entry: ["uv", "run", "python", "-m", "src.cli"]
+    tasks: ["T1"]
+    output_format: cyclonedx-json
+    optional: false
+
+  ALOHA:
+    id: ALOHA
+    display_name: "ALOHA"
+    runtime: uv
+    path: "/home/ubuntu/tools/ALOHA"
+    # requirements.txt only — no pyproject.toml
+    entry: ["uv", "run", "--with-requirements", "requirements.txt", "python", "ALOHA.py"]
+    tasks: ["T1"]
+    output_format: cyclonedx-json
+    optional: false
+
+  akumar-aibom:
+    id: akumar-aibom
+    display_name: "akumar-aibom"
+    runtime: uv
+    path: "/home/ubuntu/tools/akumar-aibom"
+    entry: ["uv", "run", "aibom"]
+    tasks: ["T2"]
+    output_format: custom-json   # schema: {models[{model, source_file, ...}], datasets[], ...}
+    optional: false
+
+  cisco-aibom:
+    id: cisco-aibom
+    display_name: "cisco-aibom"
+    runtime: uv
+    path: "/home/ubuntu/tools/cisco-aibom/aibom"
+    entry: ["uv", "run", "cisco-aibom"]
+    tasks: []                    # EXCLUDED: cisco-aibom analyze requires --llm-model unconditionally
+    output_format: cyclonedx-json
+    optional: true
+    skip_reason: >
+      cisco-aibom analyze requires --llm-model (LLM API key). There is no
+      deterministic/API-free mode in the analyze subcommand. Re-enable by
+      setting tasks: [T2] and providing AIBOM_LLM_API_KEY + AIBOM_LLM_MODEL.
+
+  jorisbot-aibom:
+    id: jorisbot-aibom
+    display_name: "jorisbot-aibom"
+    runtime: uv
+    path: "/home/ubuntu/tools/jorisbot-aibom"
+    entry: ["uv", "run", "aibom"]
+    tasks: ["T2"]
+    output_format: custom-json   # schema: {models[{name, provider, ...}], datasets[], ...}
+    optional: false
+
+  kriskimmerle-aibom:
+    id: kriskimmerle-aibom
+    display_name: "kriskimmerle-aibom"
+    runtime: python              # zero external deps — invoke python directly
+    path: "/home/ubuntu/tools/kriskimmerle-aibom"
+    entry: ["python", "aibom.py"]
+    tasks: ["T2-filesystem"]
+    output_format: custom-json   # schema: {models[], datasets[], dependencies[], ...}
+    optional: false
+
+  lab700xorg-aisbom:
+    id: lab700xorg-aisbom
+    display_name: "lab700xorg-aisbom"
+    runtime: uv
+    path: "/home/ubuntu/tools/lab700xorg-aisbom"
+    entry: ["uv", "run", "aisbom"]
+    tasks: ["T3"]
+    output_format: cyclonedx-json
+    optional: false
+
+  trusera-aibom:
+    id: trusera-aibom
+    display_name: "trusera-aibom (ai-bom)"
+    runtime: uv
+    path: "/home/ubuntu/tools/trusera-aibom"
+    entry: ["uv", "run", "ai-bom"]
+    tasks: ["T2"]
+    output_format: cyclonedx-json
+    optional: false
+
+# ----------------------------------------------------------
+# Task registry
+# ----------------------------------------------------------
+tasks:
+
+  T1:
+    id: T1
+    name: "HF Model ID → AIBOM Generation"
+    description: >
+      Given a Hugging Face model ID, generate an AIBOM document.
+      Evaluated on metadata completeness, schema conformance, runtime,
+      and failure rate.
+    datasets:
+      - id: popular
+        path: "benchmarks/datasets/model-ids/popular.json"
+        type: model-id-list
+      - id: niche
+        path: "benchmarks/datasets/model-ids/niche.json"
+        type: model-id-list
+      - id: edge-cases
+        path: "benchmarks/datasets/model-ids/edge-cases.json"
+        type: model-id-list
+    primary_metric: completeness_pct
+    scorers: [completeness, conformance]
+    notes: >
+      Each model ID is a separate job (tool × model_id). Requires HF_TOKEN
+      to avoid rate limiting. ALOHA makes unauthenticated requests.
+
+  T2:
+    id: T2
+    name: "Source Code Scanning — Model Discovery"
+    description: >
+      Scan a source repository for HF model and dataset references.
+      Evaluated on precision, recall, F1 against annotated ground truth,
+      plus conformance and completeness for tools that produce CycloneDX.
+    datasets:
+      - id: target-1
+        path: "/home/ubuntu/aibomgen-cli/targets/target-1"
+        type: source-dir
+        ground_truth: "benchmarks/ground-truth/T2-source-scan/target-1.json"
+      - id: target-2
+        path: "/home/ubuntu/aibomgen-cli/targets/target-2"
+        type: source-dir
+        ground_truth: "benchmarks/ground-truth/T2-source-scan/target-2.json"
+      - id: target-3
+        path: "/home/ubuntu/aibomgen-cli/targets/target-3"
+        type: source-dir
+        ground_truth: "benchmarks/ground-truth/T2-source-scan/target-3.json"
+    primary_metric: f1
+    scorers: [discovery, conformance, completeness]
+
+  T2-filesystem:
+    id: T2-filesystem
+    name: "Filesystem Scanning — Model File Detection"
+    description: >
+      Scan a directory for ML model weight files (.safetensors, .onnx, .h5, etc.)
+      physically present on disk. Only kriskimmerle-aibom participates.
+    datasets:
+      - id: kriskimmerle-target
+        path: "/home/ubuntu/tools/kriskimmerle-aibom/target"
+        type: source-dir
+        ground_truth: "benchmarks/ground-truth/T2-filesystem/kriskimmerle-target.json"
+    primary_metric: files_found
+    scorers: [discovery_filesystem]
+
+  T3:
+    id: T3
+    name: "Security Scanning"
+    description: >
+      Detect malicious or vulnerable models. Evaluated on TPR, FPR,
+      and detection detail richness against a labeled set of model IDs.
+    datasets:
+      - id: security-test-set
+        path: "benchmarks/datasets/security-test-set.json"
+        type: model-id-list-labeled
+        ground_truth: "benchmarks/ground-truth/T3-security-scan/labels.json"
+    primary_metric: tpr
+    scorers: [security]
+    notes: >
+      aibomgen-cli: runs `generate` (security data included by default in BOM.vulnerabilities).
+      lab700xorg-aisbom: runs `aisbom scan hf://<model_id>` for binary introspection.

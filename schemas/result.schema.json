@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "EvalRunResult",
+  "description": "Unified per-run result record written by every tool runner.",
+  "type": "object",
+  "required": [
+    "run_id", "tool", "tool_version", "tool_commit",
+    "task", "dataset", "input_spec",
+    "timestamp_start", "timestamp_end", "duration_seconds",
+    "exit_code", "success", "retries", "scores"
+  ],
+  "properties": {
+    "run_id":           { "type": "string" },
+    "tool":             { "type": "string" },
+    "tool_version":     { "type": "string" },
+    "tool_commit":      { "type": "string" },
+    "task":             { "type": "string", "enum": ["T1", "T2", "T2-filesystem", "T3"] },
+    "dataset":          { "type": "string" },
+    "input_spec":       { "type": "string", "description": "Model ID, directory path, or list file path" },
+    "timestamp_start":  { "type": "string", "format": "date-time" },
+    "timestamp_end":    { "type": "string", "format": "date-time" },
+    "duration_seconds": { "type": "number", "minimum": 0 },
+    "peak_memory_mb":   { "type": ["number", "null"], "minimum": 0 },
+    "exit_code":        { "type": "integer" },
+    "success":          { "type": "boolean" },
+    "retries":          { "type": "integer", "minimum": 0 },
+    "raw_output_path":  { "type": ["string", "null"] },
+    "error_message":    { "type": ["string", "null"] },
+    "scores": {
+      "type": "object",
+      "properties": {
+        "completeness_pct":   { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "conformance_valid":  { "type": ["boolean", "null"] },
+        "conformance_errors": { "type": ["array", "null"], "items": { "type": "string" } },
+        "precision":          { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "recall":             { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "f1":                 { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "tp":                 { "type": ["integer", "null"] },
+        "fp":                 { "type": ["integer", "null"] },
+        "fn":                 { "type": ["integer", "null"] },
+        "tpr":                { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "fpr":                { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "files_found":        { "type": ["integer", "null"] },
+        "detected_ids":       { "type": ["array", "null"], "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
