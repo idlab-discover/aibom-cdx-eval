@@ -18,7 +18,9 @@ import json
 import os
 import re
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,31 @@ from rich.table import Table
 EVAL_ROOT = Path(__file__).parent.parent
 CONFIG_PATH = EVAL_ROOT / "orchestrator" / "config.yaml"
 DEFAULT_RESULTS_DIR = EVAL_ROOT / "results" / "runs"
+
+# ── load .env from repo root (if present) before anything else ──────────
+def _load_dotenv(path: Path) -> None:
+    """Parse a .env file and inject variables into os.environ.
+
+    Only sets variables that are not already present in the environment,
+    so shell exports always take precedence.
+    Supports KEY=VALUE, KEY="VALUE", KEY='VALUE', and ignores comments/blanks.
+    """
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+_load_dotenv(EVAL_ROOT / ".env")
+# ─────────────────────────────────────────────────────────────────────────
 
 console = Console()
 
@@ -106,19 +133,39 @@ def run_local(
 
     done = failed = 0
 
-    if workers <= 1:
-        # Sequential path — simpler output, easier to read logs
-        for job in pending:
-            result = _run_job(job, run_dir, cfg)
-            status = "done" if result.success else "failed"
-            checkpoint.mark_done(job["tool"], job["task"], job["dataset"], job["input_spec"], status)
+    # ── inter-group cooldown (rate-limit guard) ───────────────────────────
+    INTER_GROUP_WAIT = 300  # 5 minutes between tool-task pairs
 
-            if result.success:
-                done += 1
-                console.print(f"  [green]✓[/green] {_job_label(job)} ({result.duration_seconds:.1f}s)")
-            else:
-                failed += 1
-                console.print(f"  [red]✗[/red] {_job_label(job)} — {result.error_message or 'unknown error'}")
+    if workers <= 1:
+        # Sequential path: process one (tool, task) group at a time with a
+        # 5-minute cooldown between groups to avoid HF rate limits.
+        groups = [
+            ((tool, task), list(grp_jobs))
+            for (tool, task), grp_jobs in groupby(
+                pending, key=lambda j: (j["tool"], j["task"])
+            )
+        ]
+
+        for group_idx, ((tool, task), group_jobs) in enumerate(groups):
+            console.print(
+                f"\n[bold cyan]── {tool} / {task}[/bold cyan] "
+                f"[dim]({len(group_jobs)} job(s))[/dim]"
+            )
+            for job in group_jobs:
+                result = _run_job(job, run_dir, cfg)
+                status = "done" if result.success else "failed"
+                checkpoint.mark_done(job["tool"], job["task"], job["dataset"], job["input_spec"], status)
+
+                retry_note = f" [yellow](retried {result.retries}×)[/yellow]" if result.retries else ""
+                if result.success:
+                    done += 1
+                    console.print(f"  [green]✓[/green] {_job_label(job)} ({result.duration_seconds:.1f}s){retry_note}")
+                else:
+                    failed += 1
+                    console.print(f"  [red]✗[/red] {_job_label(job)} — {result.error_message or 'unknown error'}{retry_note}")
+
+            if group_idx < len(groups) - 1:
+                _wait_between_groups(console, INTER_GROUP_WAIT)
     else:
         # Parallel path — results arrive out of order
         with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -142,7 +189,6 @@ def run_local(
                 else:
                     failed += 1
                     console.print(f"  [red]✗[/red] {_job_label(job)} — {result.error_message or 'unknown error'}")
-
     console.print(
         f"\n[bold]Done:[/bold] {done} succeeded, {failed} failed, {skipped} skipped."
     )
@@ -398,6 +444,23 @@ def _run_job(job: dict, run_dir: Path, cfg: dict) -> Any:
     )
     result.write(output_dir)
     return result
+
+
+def _wait_between_groups(con: Console, seconds: int) -> None:
+    """Print a live countdown and sleep between tool-task groups."""
+    con.print(
+        f"\n[bold yellow]⏸  Cooldown {seconds // 60}m between groups "
+        f"(HF rate-limit guard)[/bold yellow]"
+    )
+    remaining = seconds
+    while remaining > 0:
+        mins, secs = divmod(remaining, 60)
+        con.print(f"  [dim]Waiting {mins}:{secs:02d} …[/dim]", end="\r")
+        sleep_for = min(30, remaining)
+        time.sleep(sleep_for)
+        remaining -= sleep_for
+    con.print(" " * 40, end="\r")  # clear the countdown line
+    con.print("[dim]  Cooldown done — starting next group.[/dim]\n")
 
 
 def _job_label(job: dict) -> str:

@@ -68,7 +68,7 @@ tools:
     cdx_capable: true
     t4_groups: ["T4-G1"]
     optional: false
-    notes: "ALOHA makes unauthenticated HF requests; HF_TOKEN is NOT forwarded."
+    notes: "ALOHA reads HF_TOKEN from the environment via _hf_headers(); token is forwarded by the eval framework."
 
   lab700xorg-aisbom:
     id: lab700xorg-aisbom
@@ -148,12 +148,6 @@ tasks:
     datasets:
       - id: popular
         path: "benchmarks/datasets/model-ids/popular.json"
-        type: model-id-list
-      - id: niche
-        path: "benchmarks/datasets/model-ids/niche.json"
-        type: model-id-list
-      - id: edge-cases
-        path: "benchmarks/datasets/model-ids/edge-cases.json"
         type: model-id-list
     scorers: [performance, reliability, cdx_conformance, cdx_completeness]
 

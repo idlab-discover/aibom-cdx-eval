@@ -1,14 +1,15 @@
 """
 score_reliability.py — T2 failure-rate and error-classification metrics.
 
-Classifies the outcome of a tool invocation into one of six categories:
+Classifies the outcome of a tool invocation into one of seven categories:
 
-    success        — exit 0 + parseable non-empty output artifact
-    timeout        — process killed by timeout (exit_code -9)
-    network_error  — network/HTTP failure detected in stderr
-    parse_error    — output file exists but is not valid JSON or is empty
-    crash          — non-zero exit not explained by the above
-    missing_output — exit 0 but no output artifact found
+    success               — exit 0 + parseable non-empty output artifact
+    timeout               — process killed by timeout (exit_code -9)
+    network_error         — network/HTTP failure detected in stderr
+    unauthorized_download — 401 while downloading model weights (gated repo)
+    parse_error           — output file exists but is not valid JSON or is empty
+    crash                 — non-zero exit not explained by the above
+    missing_output        — exit 0 but no output artifact found
 
 Called by each runner after execution.  Aggregator uses these per-run
 values to compute per-tool success_rate and error_class breakdowns.
@@ -37,6 +38,14 @@ _NETWORK_PATTERNS = re.compile(
     r"httpx\.|"
     r"aiohttp\.|"
     r"socket\.(timeout|error))",
+    re.IGNORECASE,
+)
+
+# 401 on a file-download URL (e.g. /resolve/main/*.safetensors) — gated model.
+# Checked as two independent patterns so long URLs don't break the match window.
+_UNAUTHORIZED_401 = re.compile(r"\b401\b", re.IGNORECASE)
+_DOWNLOAD_URL = re.compile(
+    r"(resolve/main|resolve/refs|pytorch_model|\.safetensors|\.bin|\.pt\b)",
     re.IGNORECASE,
 )
 
@@ -74,6 +83,11 @@ def classify_error(
     # network_error: heuristic on stderr
     if stderr and _NETWORK_PATTERNS.search(stderr):
         return "network_error"
+
+    # unauthorized_download: 401 while fetching model weights from a gated repo
+    combined = (stderr or "")
+    if combined and _UNAUTHORIZED_401.search(combined) and _DOWNLOAD_URL.search(combined):
+        return "unauthorized_download"
 
     # missing_output: exit 0 but no artifact
     if exit_code == 0 and (output_path is None or not output_path.exists()):

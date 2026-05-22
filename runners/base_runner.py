@@ -216,6 +216,12 @@ class BaseRunner(abc.ABC):
         for attempt in range(max_retries + 1):
             if attempt > 0:
                 retries += 1
+                print(
+                    f"  ↻  Retry {attempt}/{max_retries} — "
+                    f"{self._tool_id} | {input_spec} "
+                    f"(exit {exit_code}, waiting {self.RETRY_DELAY}s…)",
+                    flush=True,
+                )
                 time.sleep(self.RETRY_DELAY)
 
             try:
