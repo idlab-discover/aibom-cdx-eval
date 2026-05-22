@@ -1,0 +1,24 @@
+{
+  "_comment": "Ground truth for target-09 (synthetic). Annotated detectable model references.",
+  "_method": "Manual annotation from synthetic source files.",
+  "target": "target-09",
+  "target_path": "targets/target-09",
+  "models": [
+    {
+      "id": "google/flan-t5-large",
+      "detectable": true,
+      "pattern": "Jupyter cell AutoModel.from_pretrained"
+    },
+    {
+      "id": "sentence-transformers/all-roberta-large-v1",
+      "detectable": true,
+      "pattern": "Jupyter cell SentenceTransformer"
+    },
+    {
+      "id": "stabilityai/stable-diffusion-2-1",
+      "detectable": true,
+      "pattern": "Jupyter cell DiffusionPipeline.from_pretrained"
+    }
+  ],
+  "_notes": ""
+}

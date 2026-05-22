@@ -1,0 +1,12 @@
+version: "3.9"
+services:
+  api:
+    build: ./api
+    environment:
+      - LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+      - EMBED_MODEL=sentence-transformers/all-MiniLM-L12-v2
+  worker:
+    build: ./worker
+    environment:
+      - CLASSIFIER_MODEL=facebook/bart-large-mnli
+      - SUMMARIZER_MODEL=philschmid/bart-large-cnn-samsum

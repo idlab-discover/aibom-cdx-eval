@@ -57,6 +57,10 @@ def cli() -> None:
     "--workers", default=1, show_default=True,
     help="Number of parallel workers (default 1 = sequential). Set to nproc for full parallelism."
 )
+@click.option(
+    "--limit", default=None, type=int,
+    help="Cap the number of model IDs per model-id-list dataset (default: from config)."
+)
 def run_local(
     run_id: str | None,
     results_dir: str,
@@ -64,6 +68,7 @@ def run_local(
     tasks: str | None,
     skip_done: bool,
     workers: int,
+    limit: int | None,
 ) -> None:
     """Run all jobs on the current machine. Use --workers N to run in parallel."""
     from orchestrator.checkpoint import Checkpoint
@@ -73,7 +78,9 @@ def run_local(
         console.print(f"[dim]Auto run-id: {run_id}[/dim]")
 
     cfg = _load_config()
-    jobs = _build_jobs(cfg, tools, tasks)
+    if limit is None:
+        limit = cfg.get("run", {}).get("default_dataset_limit", 100)
+    jobs = _build_jobs(cfg, tools, tasks, dataset_limit=limit)
 
     run_dir = Path(results_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -114,9 +121,8 @@ def run_local(
                 console.print(f"  [red]✗[/red] {_job_label(job)} — {result.error_message or 'unknown error'}")
     else:
         # Parallel path — results arrive out of order
-        cfg_snapshot = _load_config()  # each subprocess gets its own copy
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_run_job, job, run_dir, cfg_snapshot): job for job in pending}
+            futures = {pool.submit(_run_job, job, run_dir, cfg): job for job in pending}
             for future in as_completed(futures):
                 job = futures[future]
                 try:
@@ -199,9 +205,9 @@ def aggregate(run_id: str | None, results_dir: str) -> None:
     from scoring.aggregate import main as agg_main
     from analysis.report import main as report_main
 
-    # Invoke via Click's standalone mode
-    agg_main.main(["--run-id", run_id, "--results-dir", results_dir], standalone_mode=False)
-    report_main.main(["--run-id", run_id], standalone_mode=False)
+    run_dir = Path(results_dir) / run_id
+    agg_main(["--run-id", run_id, "--results-dir", results_dir], standalone_mode=False)
+    report_main(["--run-id", run_id], standalone_mode=False)
 
 
 # ================================================================== #
@@ -242,7 +248,8 @@ def _load_config() -> dict:
 
 
 def _build_jobs(
-    cfg: dict, tool_filter: str | None, task_filter: str | None
+    cfg: dict, tool_filter: str | None, task_filter: str | None,
+    dataset_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """
     Build a flat list of job dicts: {tool, task, dataset, input_spec, ...}.
@@ -274,47 +281,77 @@ def _build_jobs(
                 dataset_type = dataset.get("type", "source-dir")
                 ground_truth = dataset.get("ground_truth", "")
 
-                input_items = _resolve_inputs(dataset, dataset_type)
+                input_items = _resolve_inputs(dataset, dataset_type, dataset_limit)
+                # Resolve ground_truth path
+                gt_resolved = ""
+                if ground_truth:
+                    gt_path = Path(ground_truth)
+                    if not gt_path.is_absolute():
+                        gt_path = EVAL_ROOT / gt_path
+                    gt_resolved = str(gt_path)
                 for item in input_items:
                     jobs.append({
                         "tool":            tool_id,
                         "task":            task_id,
                         "dataset":         dataset_id,
                         "input_spec":      item,
-                        "ground_truth":    ground_truth,
+                        "ground_truth":    gt_resolved,
                         "hf_token_env":    hf_token_env,
-                        "tool_config":     tool_cfg,
-                        "task_config":     {**task_cfg, "id": task_id, "current_dataset_ground_truth": ground_truth},
+                        "tool_config":     {**tool_cfg, "path": str(_resolve_tool_path(tool_cfg))},
+                        "task_config":     {**task_cfg, "id": task_id, "current_dataset_ground_truth": gt_resolved},
                     })
 
     return jobs
 
 
-def _resolve_inputs(dataset: dict, dataset_type: str) -> list[str]:
+def _resolve_tool_path(tool_cfg: dict) -> Path:
+    """Resolve tool path relative to EVAL_ROOT if not absolute."""
+    path = tool_cfg.get("path", "")
+    p = Path(path)
+    if not p.is_absolute() and path:
+        p = EVAL_ROOT / path
+    return p
+
+
+def _resolve_inputs(
+    dataset: dict, dataset_type: str, limit: int | None = None
+) -> list[str]:
     """
     Resolve a dataset spec to a list of input_spec strings.
 
-    model-id-list           → list of model ID strings from the JSON file
+    model-id-list           → list of model ID strings (supports both {models:[]} and [] formats)
     model-id-list-labeled   → list of model ID strings from inputs[*].id
     source-dir              → [path] (single directory scan)
     """
     path = dataset.get("path", "")
 
     if dataset_type == "source-dir":
-        return [path]
+        # Resolve relative paths against EVAL_ROOT
+        p = Path(path)
+        if not p.is_absolute():
+            p = EVAL_ROOT / p
+        return [str(p)]
 
     if dataset_type in ("model-id-list", "model-id-list-labeled"):
-        json_path = EVAL_ROOT / path
+        json_path = Path(path)
+        if not json_path.is_absolute():
+            json_path = EVAL_ROOT / json_path
         try:
             with open(json_path) as f:
                 data = json.load(f)
         except Exception:
             return []
 
-        if dataset_type == "model-id-list":
-            return data.get("models", [])
+        if isinstance(data, list):
+            items = data
+        elif dataset_type == "model-id-list":
+            items = data.get("models", [])
         else:
-            return [item["id"] for item in data.get("inputs", [])]
+            items = [item["id"] for item in data.get("inputs", [])]
+
+        if limit is not None:
+            items = items[:limit]
+        return items
 
     return [path]
 

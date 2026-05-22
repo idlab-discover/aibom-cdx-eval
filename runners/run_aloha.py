@@ -10,14 +10,26 @@ from pathlib import Path
 from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.score_completeness import score_completeness
-from scoring.score_conformance import score_conformance
+from scoring.score_cdx_conformance import score_cdx_conformance
+from scoring.score_cdx_completeness import score_cdx_completeness
 
 
 class ALOHARunner(BaseRunner):
+    # working_dir() resolved by BaseRunner from config path (relative to EVAL_ROOT)
 
-    def working_dir(self) -> Path:
-        return Path(self.tool_config["path"])
+    def adjust_exit_code(self, exit_code: int, stdout_log: Path, stderr_log: Path) -> int:
+        """ALOHA calls bare exit() (code 0) on API errors such as 429 rate
+        limits.  Detect the error message in stdout and return 1 so the base
+        runner's retry loop kicks in.
+        """
+        if exit_code == 0:
+            try:
+                text = stdout_log.read_text(errors="replace")
+                if "\u274c" in text:  # ALOHA prints ❌ on any fatal error
+                    return 1
+            except OSError:
+                pass
+        return exit_code
 
     def build_command(
         self, input_spec: str, output_dir: Path, run_env: dict
@@ -42,6 +54,6 @@ class ALOHARunner(BaseRunner):
         if output_path is None:
             return {}
         return {
-            **score_completeness(output_path),
-            **score_conformance(output_path),
+            **score_cdx_conformance(output_path),
+            **score_cdx_completeness(output_path),
         }

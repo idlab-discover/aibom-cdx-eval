@@ -1,0 +1,39 @@
+{
+  "_comment": "Ground truth for target-15 (synthetic). Annotated detectable model references.",
+  "_method": "Manual annotation from synthetic source files.",
+  "target": "target-15",
+  "target_path": "targets/target-15",
+  "models": [
+    {
+      "id": "meta-llama/Meta-Llama-3-8B-Instruct",
+      "detectable": true,
+      "pattern": "REGISTRY dict + YAML + Dockerfile"
+    },
+    {
+      "id": "sentence-transformers/all-MiniLM-L6-v2",
+      "detectable": true,
+      "pattern": "REGISTRY dict + YAML"
+    },
+    {
+      "id": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+      "detectable": true,
+      "pattern": "REGISTRY dict"
+    },
+    {
+      "id": "openai/clip-vit-base-patch32",
+      "detectable": true,
+      "pattern": "REGISTRY dict"
+    },
+    {
+      "id": "Xenova/gpt2",
+      "detectable": true,
+      "pattern": "TypeScript const"
+    },
+    {
+      "id": "Xenova/all-MiniLM-L6-v2",
+      "detectable": true,
+      "pattern": "TypeScript const"
+    }
+  ],
+  "_notes": ""
+}

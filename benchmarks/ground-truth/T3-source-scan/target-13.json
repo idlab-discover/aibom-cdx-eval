@@ -1,0 +1,24 @@
+{
+  "_comment": "Ground truth for target-13 (synthetic). Annotated detectable model references.",
+  "_method": "Manual annotation from synthetic source files.",
+  "target": "target-13",
+  "target_path": "targets/target-13",
+  "models": [
+    {
+      "id": "google-bert/bert-base-cased",
+      "detectable": true,
+      "pattern": "shell + Python from_pretrained"
+    },
+    {
+      "id": "openai-community/gpt2-medium",
+      "detectable": true,
+      "pattern": "shell script from_pretrained"
+    },
+    {
+      "id": "FacebookAI/roberta-base",
+      "detectable": true,
+      "pattern": "shell script from_pretrained"
+    }
+  ],
+  "_notes": ""
+}

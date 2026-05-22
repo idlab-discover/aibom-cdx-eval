@@ -2,12 +2,17 @@
 aggregate.py — cross-tool, cross-task result aggregation.
 
 Reads all metrics.json files from a completed run and produces:
-  results/aggregated/summary.json  — per-tool per-task summary stats
-  results/aggregated/rankings.csv  — normalized 0–1 scores per tool per task
+  results/aggregated/<run-id>_summary.json  — per-tool per-sub-task summary stats
+  results/aggregated/<run-id>_rankings.csv  — primary-metric rankings (within group)
+
+Sub-tasks derived from raw task IDs:
+  T1_T2   → split into T1 (performance) and T2 (reliability) sub-sections
+  T3_T4G2 → split into T3 (discovery) and T4-G2 (CDX quality) sub-sections
+  T1_T2 CDX-capable tools → also produce T4-G1 sub-section
 
 Usage:
     python -m scoring.aggregate --run-id <run-id>
-    python -m scoring.aggregate --run-id <run-id> --results-dir results/runs
+    uv run eval aggregate --run-id <run-id>
 """
 
 from __future__ import annotations
@@ -25,12 +30,13 @@ EVAL_ROOT = Path(__file__).parent.parent
 DEFAULT_RESULTS_DIR = EVAL_ROOT / "results" / "runs"
 AGGREGATED_DIR = EVAL_ROOT / "results" / "aggregated"
 
-# Primary metric per task (used for ranking)
+# Primary metric for rankings per sub-task
 PRIMARY_METRICS: dict[str, str] = {
-    "T1":             "completeness_pct",
-    "T2":             "f1",
-    "T2-filesystem":  "files_found",
-    "T3":             "tpr",
+    "T1":    "normalized_throughput",
+    "T2":    "success_rate",
+    "T3":    "f1",
+    "T4-G1": "cdx_completeness_pct_v16",
+    "T4-G2": "cdx_completeness_pct_v16",
 }
 
 
@@ -50,18 +56,6 @@ def main(run_id: str, results_dir: str) -> None:
 
     records = _load_all_metrics(run_dir)
     click.echo(f"Loaded {len(records)} result records from run {run_id}")
-
-    # Guard against incomplete aggregation due to missing/overwritten metrics.
-    expected = _expected_record_count(run_dir)
-    if expected is not None and len(records) != expected:
-        click.echo(
-            f"WARNING: expected {expected} metrics records from checkpoint, "
-            f"but found {len(records)}. Aggregates may be incomplete.",
-            err=True,
-        )
-
-    # -- Post-process T3: compute TPR/FPR across models per tool ----------
-    records = _compute_t3_aggregate(records)
 
     summary = _build_summary(records)
     rankings = _build_rankings(summary)
@@ -93,101 +87,200 @@ def _load_all_metrics(run_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _expected_record_count(run_dir: Path) -> int | None:
-    """Return expected number of metrics records based on checkpoint, if present."""
-    checkpoint_path = run_dir / "checkpoint.json"
-    if not checkpoint_path.exists():
-        return None
-    try:
-        with open(checkpoint_path) as f:
-            checkpoint = json.load(f)
-        return len(checkpoint)
-    except Exception:
-        return None
-
-
-# ------------------------------------------------------------------ #
-# T3 post-processing: aggregate per-model security results per tool   #
-# ------------------------------------------------------------------ #
-
-def _compute_t3_aggregate(records: list[dict]) -> list[dict]:
-    """
-    For T3, each record is one (tool, model_id) result.
-    Compute TPR/FPR per tool from all per-model records and inject into records.
-    """
-    from scoring.score_security import score_security_aggregate
-
-    # Group T3 records by tool
-    t3_by_tool: dict[str, list[dict]] = defaultdict(list)
-    for r in records:
-        if r.get("task") == "T3":
-            t3_by_tool[r["tool"]].append(r)
-
-    for tool, tool_records in t3_by_tool.items():
-        per_model = [r.get("scores", {}) for r in tool_records]
-        agg = score_security_aggregate(per_model)
-        # Inject aggregate TPR/FPR into each record's scores
-        for r in tool_records:
-            r["scores"].update(agg)
-
-    return records
-
-
 # ------------------------------------------------------------------ #
 # Summary                                                              #
 # ------------------------------------------------------------------ #
 
 def _build_summary(records: list[dict]) -> dict[str, Any]:
     """
-    Build per-tool per-task summary with mean/min/max of key metrics.
+    Produce five sub-sections:
+      T1      — performance metrics from T1_T2 records
+      T2      — reliability metrics from T1_T2 records
+      T3      — discovery metrics from T3_T4G2 records
+      T4-G1   — CDX quality for CDX-capable T1_T2 tools
+      T4-G2   — CDX quality for CDX-capable T3_T4G2 tools
     """
-    # Group by (tool, task)
-    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for r in records:
-        grouped[(r["tool"], r["task"])].append(r)
+    t1t2_records   = [r for r in records if r.get("task") == "T1_T2"]
+    t3t4g2_records = [r for r in records if r.get("task") == "T3_T4G2"]
 
     summary: dict[str, Any] = {}
-    for (tool, task), recs in sorted(grouped.items()):
-        key = f"{tool}::{task}"
-        scores_list = [r.get("scores", {}) for r in recs]
-        durations = [r["duration_seconds"] for r in recs if r.get("success")]
-        memory = [r["peak_memory_mb"] for r in recs if r.get("peak_memory_mb") is not None]
-        successes = [r for r in recs if r.get("success")]
 
-        summary[key] = {
-            "tool":          tool,
-            "task":          task,
-            "total_runs":    len(recs),
-            "successful":    len(successes),
-            "failure_rate":  round(1 - len(successes) / max(len(recs), 1), 4),
-            "duration_mean": _mean(durations),
-            "duration_min":  min(durations) if durations else None,
-            "duration_max":  max(durations) if durations else None,
-            "memory_mean_mb": _mean(memory),
-            "metrics": {
-                metric: _aggregate_metric(scores_list, metric)
-                for metric in [
-                    "completeness_pct", "conformance_valid",
-                    "precision", "recall", "f1",
-                    "tpr", "fpr", "files_found",
-                ]
-            },
-        }
+    _aggregate_section(
+        summary, "T1", t1t2_records,
+        metric_keys=["normalized_throughput", "size_normalized_throughput",
+                     "fields_present", "output_size_bytes"],
+    )
+    _aggregate_reliability(summary, "T2", t1t2_records)
+    _aggregate_section(
+        summary, "T3", t3t4g2_records,
+        metric_keys=["precision", "recall", "f1"],
+    )
+    _aggregate_cdx(summary, "T4-G1", [r for r in t1t2_records if _has_cdx(r)])
+    _aggregate_cdx(summary, "T4-G2", [r for r in t3t4g2_records if _has_cdx(r)])
 
     return summary
 
 
-def _aggregate_metric(scores_list: list[dict], metric: str) -> dict | None:
-    values = [
-        s[metric] for s in scores_list
-        if metric in s and s[metric] is not None
-    ]
+def _aggregate_section(
+    summary: dict, sub_task: str,
+    records: list[dict], metric_keys: list[str],
+) -> None:
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_tool[r["tool"]].append(r)
+
+    for tool, recs in sorted(by_tool.items()):
+        key = f"{tool}::{sub_task}"
+        scores = [r.get("scores", {}) for r in recs]
+        successes = [r for r in recs if r.get("success")]
+
+        duration_vals = [
+            r["duration_seconds"] for r in successes
+            if r.get("duration_seconds") is not None
+        ]
+
+        summary[key] = {
+            "tool":         tool,
+            "sub_task":     sub_task,
+            "total_runs":   len(recs),
+            "successful":   len(successes),
+            "success_rate": round(len(successes) / max(len(recs), 1), 4),
+            "metrics": {
+                **{m: _agg_metric(scores, m) for m in metric_keys},
+                "duration_seconds": {
+                    "mean": _mean(duration_vals),
+                    "min":  round(min(duration_vals), 4) if duration_vals else None,
+                    "max":  round(max(duration_vals), 4) if duration_vals else None,
+                    "n":    len(duration_vals),
+                } if duration_vals else None,
+            },
+        }
+
+
+def _aggregate_reliability(
+    summary: dict, sub_task: str, records: list[dict],
+) -> None:
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_tool[r["tool"]].append(r)
+
+    for tool, recs in sorted(by_tool.items()):
+        key = f"{tool}::{sub_task}"
+        successes = sum(1 for r in recs if r.get("success"))
+        total = len(recs)
+        success_rate = round(successes / max(total, 1), 4)
+
+        error_counts: dict[str, int] = defaultdict(int)
+        for r in recs:
+            ec = r.get("scores", {}).get("error_class") or (
+                "success" if r.get("success") else "crash"
+            )
+            error_counts[ec] += 1
+
+        summary[key] = {
+            "tool":            tool,
+            "sub_task":        sub_task,
+            "total_runs":      total,
+            "successful":      successes,
+            "success_rate":    success_rate,
+            "failure_rate":    round(1 - success_rate, 4),
+            "error_breakdown": dict(error_counts),
+            "retries_mean":    _mean([r.get("retries", 0) for r in recs]),
+        }
+
+
+def _aggregate_cdx(
+    summary: dict, sub_task: str, records: list[dict],
+) -> None:
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_tool[r["tool"]].append(r)
+
+    for tool, recs in sorted(by_tool.items()):
+        key = f"{tool}::{sub_task}"
+        scores = [r.get("scores", {}) for r in recs]
+
+        v16_valid = [s["cdx_conformance_valid_v16"] for s in scores
+                     if s.get("cdx_conformance_valid_v16") is not None]
+        v17_valid = [s["cdx_conformance_valid_v17"] for s in scores
+                     if s.get("cdx_conformance_valid_v17") is not None]
+
+        summary[key] = {
+            "tool":     tool,
+            "sub_task": sub_task,
+            "total_runs": len(recs),
+            "metrics": {
+                "cdx_completeness_pct_v16":      _agg_metric(scores, "cdx_completeness_pct_v16"),
+                "cdx_completeness_pct_v17":      _agg_metric(scores, "cdx_completeness_pct_v17"),
+                "cdx_conformance_pass_rate_v16": round(
+                    sum(bool(v) for v in v16_valid) / max(len(v16_valid), 1), 4
+                ) if v16_valid else None,
+                "cdx_conformance_pass_rate_v17": round(
+                    sum(bool(v) for v in v17_valid) / max(len(v17_valid), 1), 4
+                ) if v17_valid else None,
+            },
+        }
+
+
+def _has_cdx(record: dict) -> bool:
+    return record.get("scores", {}).get("cdx_conformance_valid_v16") is not None
+
+
+# ------------------------------------------------------------------ #
+# Rankings                                                             #
+# ------------------------------------------------------------------ #
+
+def _build_rankings(summary: dict) -> list[dict[str, Any]]:
+    by_subtask: dict[str, list[dict]] = defaultdict(list)
+    for entry in summary.values():
+        by_subtask[entry["sub_task"]].append(entry)
+
+    rows: list[dict] = []
+    for sub_task, entries in sorted(by_subtask.items()):
+        primary_key = PRIMARY_METRICS.get(sub_task)
+        if not primary_key:
+            continue
+
+        scored = []
+        for e in entries:
+            if primary_key in ("success_rate", "failure_rate"):
+                raw = e.get(primary_key)
+            else:
+                agg = e.get("metrics", {}).get(primary_key)
+                raw = agg["mean"] if isinstance(agg, dict) else None
+            scored.append((e["tool"], raw))
+
+        values = [v for _, v in scored if v is not None]
+        v_min = min(values) if values else 0
+        v_max = max(values) if values else 1
+        span = v_max - v_min if v_max != v_min else 1.0
+
+        ranked = sorted(scored, key=lambda x: (x[1] is None, -(x[1] or 0)))
+        for rank, (tool, raw) in enumerate(ranked, start=1):
+            normalized = None
+            if raw is not None and values:
+                normalized = round((raw - v_min) / span, 4) if span else 1.0
+            rows.append({
+                "sub_task":         sub_task,
+                "tool":             tool,
+                "primary_metric":   primary_key,
+                "raw_score":        raw,
+                "normalized_score": normalized,
+                "rank":             rank,
+            })
+
+    return rows
+
+
+# ------------------------------------------------------------------ #
+# Helpers                                                              #
+# ------------------------------------------------------------------ #
+
+def _agg_metric(scores_list: list[dict], key: str) -> dict | None:
+    values = [s[key] for s in scores_list if key in s and s[key] is not None]
     if not values:
         return None
-    # conformance_valid is bool → convert to 0/1 rate
-    if isinstance(values[0], bool):
-        values = [float(v) for v in values]
-    numeric = [v for v in values if isinstance(v, (int, float))]
+    numeric = [float(v) for v in values if isinstance(v, (int, float, bool))]
     if not numeric:
         return None
     return {
@@ -198,55 +291,10 @@ def _aggregate_metric(scores_list: list[dict], metric: str) -> dict | None:
     }
 
 
-# ------------------------------------------------------------------ #
-# Rankings                                                             #
-# ------------------------------------------------------------------ #
-
-def _build_rankings(summary: dict) -> list[dict[str, Any]]:
-    """
-    Build per-task normalized rankings. Each row is (task, tool, score_0_1, rank).
-    """
-    # Group entries by task
-    by_task: dict[str, list[dict]] = defaultdict(list)
-    for entry in summary.values():
-        by_task[entry["task"]].append(entry)
-
-    rows: list[dict] = []
-    for task, entries in sorted(by_task.items()):
-        primary = PRIMARY_METRICS.get(task)
-        if not primary:
-            continue
-
-        # Extract raw primary metric values
-        scored = []
-        for e in entries:
-            metric_agg = e["metrics"].get(primary)
-            raw = metric_agg["mean"] if metric_agg else None
-            scored.append((e["tool"], raw))
-
-        # Normalize to 0–1
-        values = [v for _, v in scored if v is not None]
-        v_min, v_max = (min(values), max(values)) if values else (0, 1)
-        span = v_max - v_min if v_max != v_min else 1.0
-
-        ranked = sorted(scored, key=lambda x: (x[1] is None, -(x[1] or 0)))
-        for rank, (tool, raw) in enumerate(ranked, start=1):
-            if raw is None:
-                normalized = None
-            elif values and v_max == v_min:
-                normalized = 1.0
-            else:
-                normalized = round((raw - v_min) / span, 4)
-            rows.append({
-                "task":               task,
-                "tool":               tool,
-                "primary_metric":     primary,
-                "raw_score":          raw,
-                "normalized_score":   normalized,
-                "rank":               rank,
-            })
-
-    return rows
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 4)
 
 
 def _write_csv(rows: list[dict], path: Path) -> None:
@@ -257,16 +305,6 @@ def _write_csv(rows: list[dict], path: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-
-
-# ------------------------------------------------------------------ #
-# Math helpers                                                         #
-# ------------------------------------------------------------------ #
-
-def _mean(values: list[float]) -> float | None:
-    if not values:
-        return None
-    return round(sum(values) / len(values), 4)
 
 
 if __name__ == "__main__":

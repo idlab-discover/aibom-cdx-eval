@@ -10,15 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.normalize import extract_model_ids_cyclonedx
-from scoring.score_completeness import score_completeness
-from scoring.score_conformance import score_conformance
+from scoring.score_cdx_conformance import score_cdx_conformance
+from scoring.score_cdx_completeness import score_cdx_completeness
 
 
 class AibomGeneratorRunner(BaseRunner):
-
-    def working_dir(self) -> Path:
-        return Path(self.tool_config["path"])
+    # working_dir() resolved by BaseRunner from config path (relative to EVAL_ROOT)
 
     def build_command(
         self, input_spec: str, output_dir: Path, run_env: dict
@@ -38,6 +35,6 @@ class AibomGeneratorRunner(BaseRunner):
         if output_path is None:
             return {}
         return {
-            **score_completeness(output_path),
-            **score_conformance(output_path),
+            **score_cdx_conformance(output_path),
+            **score_cdx_completeness(output_path),
         }

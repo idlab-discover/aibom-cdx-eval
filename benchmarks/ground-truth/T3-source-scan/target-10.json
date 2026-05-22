@@ -1,0 +1,29 @@
+{
+  "_comment": "Ground truth for target-10 (synthetic). Annotated detectable model references.",
+  "_method": "Manual annotation from synthetic source files.",
+  "target": "target-10",
+  "target_path": "targets/target-10",
+  "models": [
+    {
+      "id": "mistralai/Mistral-7B-Instruct-v0.2",
+      "detectable": true,
+      "pattern": "docker-compose.yml LLM_MODEL"
+    },
+    {
+      "id": "sentence-transformers/all-MiniLM-L12-v2",
+      "detectable": true,
+      "pattern": "docker-compose.yml EMBED_MODEL"
+    },
+    {
+      "id": "facebook/bart-large-mnli",
+      "detectable": true,
+      "pattern": "docker-compose.yml CLASSIFIER_MODEL"
+    },
+    {
+      "id": "philschmid/bart-large-cnn-samsum",
+      "detectable": true,
+      "pattern": "docker-compose.yml SUMMARIZER_MODEL"
+    }
+  ],
+  "_notes": ""
+}

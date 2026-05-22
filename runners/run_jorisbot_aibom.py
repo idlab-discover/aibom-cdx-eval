@@ -9,15 +9,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from runners.base_runner import BaseRunner
-from scoring.normalize import extract_model_ids_jorisbot
+from runners.base_runner import BaseRunner, EVAL_ROOT
+from scoring.extract import extract_model_ids_jorisbot
 from scoring.score_discovery import score_discovery
 
 
 class JorisbotAibomRunner(BaseRunner):
-
-    def working_dir(self) -> Path:
-        return Path(self.tool_config["path"])
+    # working_dir() resolved by BaseRunner from config path (relative to EVAL_ROOT)
 
     def build_command(
         self, input_spec: str, output_dir: Path, run_env: dict
@@ -39,13 +37,15 @@ class JorisbotAibomRunner(BaseRunner):
         if output_path is None:
             return {}
 
-        ground_truth_path = Path(
-            self.task_config.get("current_dataset_ground_truth", "")
-        )
+        gt_str = self.task_config.get("current_dataset_ground_truth", "")
+        ground_truth_path = Path(gt_str) if gt_str else None
+        if ground_truth_path and not ground_truth_path.is_absolute():
+            ground_truth_path = EVAL_ROOT / ground_truth_path
+
         detected = extract_model_ids_jorisbot(output_path)
         scores: dict[str, Any] = {"detected_ids": detected}
 
-        if ground_truth_path.exists():
+        if ground_truth_path and ground_truth_path.exists():
             scores.update(score_discovery(detected, ground_truth_path))
 
         return scores

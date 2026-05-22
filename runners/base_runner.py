@@ -21,6 +21,9 @@ from typing import Any
 # Root of the eval repo — used for making raw_output_path relative
 EVAL_ROOT = Path(__file__).parent.parent
 
+from scoring.score_performance import score_performance   # noqa: E402
+from scoring.score_reliability import score_reliability   # noqa: E402
+
 
 @dataclasses.dataclass
 class RunResult:
@@ -92,7 +95,36 @@ class BaseRunner(abc.ABC):
 
     def working_dir(self) -> Path:
         """Working directory for the subprocess (defaults to tool path)."""
-        return Path(self.tool_config.get("path", "."))
+        tool_path = self.tool_config.get("path", ".")
+        # Resolve relative paths against EVAL_ROOT
+        p = Path(tool_path)
+        if not p.is_absolute():
+            p = EVAL_ROOT / p
+        return p
+
+    def pre_run(self) -> None:
+        """Called once before the subprocess loop. Override to apply
+        local patches or environment fixups without touching the submodule
+        git history.
+        """
+
+    def adjust_exit_code(self, exit_code: int, stdout_log: Path, stderr_log: Path) -> int:
+        """Called after each subprocess attempt with the raw exit code.
+
+        Override to inspect stdout/stderr and return a non-zero code when the
+        tool silently fails (e.g. exits 0 on a rate-limit error).  The returned
+        code is used for the retry decision; the original ``proc.returncode``
+        is NOT modified for the final result.
+        """
+        return exit_code
+
+    def cleanup_side_effects(self, tool_output_dir: Path, input_spec: str = "") -> None:
+        """Delete any files created by the tool outside tool_output_dir.
+
+        Override in runners for tools that emit side-effect files into
+        their working directory or the scanned target directory.
+        Called unconditionally after each run.
+        """
 
     def get_version(self) -> tuple[str, str]:
         """Return (version_string, commit_hash). Override per tool."""
@@ -160,6 +192,7 @@ class BaseRunner(abc.ABC):
         run_env["PYTHONHASHSEED"] = "42"
         run_env.setdefault("TRANSFORMERS_SEED", "42")
 
+        self.pre_run()
         version, commit = self.get_version()
         cmd = self.build_command(input_spec, tool_output_dir, run_env)
 
@@ -196,6 +229,7 @@ class BaseRunner(abc.ABC):
                         timeout=timeout,
                     )
                 exit_code = proc.returncode
+                exit_code = self.adjust_exit_code(exit_code, stdout_log, stderr_log)
 
                 if has_gnu_time and time_stats_file.exists():
                     peak_memory_mb = _parse_gnu_time_memory(time_stats_file)
@@ -220,6 +254,7 @@ class BaseRunner(abc.ABC):
 
         raw_output_path: str | None = None
         scores: dict[str, Any] = {}
+        stderr_text = _read_tail(stderr_log, 2000)
 
         if success:
             found = self.locate_output(tool_output_dir)
@@ -228,7 +263,11 @@ class BaseRunner(abc.ABC):
                     raw_output_path = str(found.relative_to(EVAL_ROOT))
                 except ValueError:
                     raw_output_path = str(found)
-                scores = self.score(found, input_spec)
+                # Performance metrics (T1_T2 runs benefit most, but compute always)
+                perf = score_performance(found, duration)
+                scores.update(perf)
+                # Tool-specific scores (discovery, cdx, etc.)
+                scores.update(self.score(found, input_spec))
             else:
                 success = False
                 error_msg = (
@@ -238,6 +277,19 @@ class BaseRunner(abc.ABC):
         else:
             if error_msg is None:
                 error_msg = _build_error_message(stderr_log, stdout_log)
+
+        # Reliability classification — always computed (success or failure)
+        found_path = self.locate_output(tool_output_dir) if not success else (
+            Path(EVAL_ROOT / raw_output_path) if raw_output_path else None
+        )
+        rel = score_reliability(exit_code, stderr_text, found_path, success)
+        scores.update(rel)
+
+        # Unconditional cleanup of tool side-effect files
+        try:
+            self.cleanup_side_effects(tool_output_dir, input_spec)
+        except Exception:
+            pass
 
         return RunResult(
             run_id=run_id,

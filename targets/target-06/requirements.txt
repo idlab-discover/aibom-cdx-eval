@@ -1,0 +1,4 @@
+transformers>=4.35
+torch>=2.0
+sentence-transformers>=2.2
+# model: stabilityai/stable-diffusion-xl-base-1.0

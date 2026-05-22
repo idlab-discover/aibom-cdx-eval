@@ -2,10 +2,10 @@
 Runner for aibomgen-cli (Go binary).
 
 Task dispatch:
-  T1  — `aibomgen-cli generate -m <model_id> --output <dir> --format json`
-  T2  — `aibomgen-cli scan -i <source_dir> --output <dir> --format json`
-  T3  — `aibomgen-cli generate -m <model_id> --output <dir> --format json`
-         Security data is included in BOM.vulnerabilities by default.
+  T1_T2   — `aibomgen-cli generate -m <model_id> ...`
+             Aggregator derives T1 (performance) and T2 (reliability) metrics.
+  T3_T4G2 — `aibomgen-cli scan -i <source_dir> ...`
+             Aggregator derives T3 (discovery) and T4-G2 (CDX conformance) metrics.
 """
 
 from __future__ import annotations
@@ -15,11 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from runners.base_runner import BaseRunner, EVAL_ROOT
-from scoring.normalize import extract_model_ids_cyclonedx
-from scoring.score_completeness import score_completeness
-from scoring.score_conformance import score_conformance
+from scoring.extract import extract_model_ids_cyclonedx
+from scoring.score_cdx_conformance import score_cdx_conformance
+from scoring.score_cdx_completeness import score_cdx_completeness
 from scoring.score_discovery import score_discovery
-from scoring.score_security import score_security_cyclonedx
 
 
 class AibomgenCliRunner(BaseRunner):
@@ -35,6 +34,7 @@ class AibomgenCliRunner(BaseRunner):
             return "unknown", "unknown"
 
     def working_dir(self) -> Path:
+        # aibomgen-cli binary resolves paths relative to cwd; use eval root
         return EVAL_ROOT
 
     def build_command(
@@ -48,21 +48,19 @@ class AibomgenCliRunner(BaseRunner):
         if hf_token:
             base += ["--hf-token", hf_token]
 
-        if task_id == "T2":
+        if task_id == "T3_T4G2":
             return base + [
                 "scan",
                 "--input", input_spec,
-                # aibomgen-cli writes outputs to dirname(--output)
                 "--output", str(output_dir / "out"),
                 "--format", "json",
                 "--log-level", "quiet",
             ]
         else:
-            # T1 and T3 both use generate (T3 includes security data by default)
+            # T1_T2: generate mode
             return base + [
                 "generate",
                 "--model-id", input_spec,
-                # aibomgen-cli writes outputs to dirname(--output)
                 "--output", str(output_dir / "out"),
                 "--format", "json",
                 "--log-level", "quiet",
@@ -70,8 +68,6 @@ class AibomgenCliRunner(BaseRunner):
             ]
 
     def locate_output(self, output_dir: Path) -> Path | None:
-        # Prefer direct tool_output matches; fallback to parent dir for tools
-        # that write to dirname(--output).
         matches = sorted(output_dir.glob("*.json"))
         if not matches:
             matches = sorted(output_dir.parent.glob("*.json"))
@@ -84,34 +80,28 @@ class AibomgenCliRunner(BaseRunner):
         task_id = self.task_config["id"]
         scores: dict[str, Any] = {}
 
-        if task_id in ("T1", "T2"):
-            comp = score_completeness(output_path)
-            conf = score_conformance(output_path)
-            scores.update(comp)
-            scores.update(conf)
+        # CDX conformance + completeness for all tasks (aibomgen-cli always outputs CDX)
+        scores.update(score_cdx_conformance(output_path))
+        scores.update(score_cdx_completeness(output_path))
 
-        if task_id == "T2":
-            ground_truth_path = Path(
-                self.task_config.get("current_dataset_ground_truth", "")
+        if task_id == "T3_T4G2":
+            # Discovery metrics against ground truth
+            ground_truth_path_str = self.task_config.get(
+                "current_dataset_ground_truth", ""
             )
-            if ground_truth_path.exists():
-                # Scan can emit multiple BOM files in one run; score on union.
+            ground_truth_path = Path(ground_truth_path_str) if ground_truth_path_str else None
+            if ground_truth_path and not ground_truth_path.is_absolute():
+                ground_truth_path = EVAL_ROOT / ground_truth_path
+
+            if ground_truth_path and ground_truth_path.exists():
                 detected: list[str] = []
+                # Scan may emit multiple BOM files; union them
                 for bom_path in sorted(output_path.parent.glob("*_aibom.json")):
                     detected.extend(extract_model_ids_cyclonedx(bom_path))
                 if not detected:
                     detected = extract_model_ids_cyclonedx(output_path)
                 detected = list(dict.fromkeys(detected))
-                disc = score_discovery(detected, ground_truth_path)
-                scores.update(disc)
+                scores.update(score_discovery(detected, ground_truth_path))
                 scores["detected_ids"] = detected
-
-        if task_id == "T3":
-            ground_truth_path = Path(
-                self.task_config.get("current_dataset_ground_truth")
-                or self.task_config.get("ground_truth", "")
-            )
-            sec = score_security_cyclonedx(output_path, input_spec, ground_truth_path)
-            scores.update(sec)
 
         return scores

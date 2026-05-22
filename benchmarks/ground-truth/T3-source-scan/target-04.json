@@ -1,0 +1,24 @@
+{
+  "_comment": "Ground truth for target-04 (synthetic). Annotated detectable model references.",
+  "_method": "Manual annotation from synthetic source files.",
+  "target": "target-04",
+  "target_path": "targets/target-04",
+  "models": [
+    {
+      "id": "facebook/bart-large-cnn",
+      "detectable": true,
+      "pattern": "pipeline(model=)"
+    },
+    {
+      "id": "openai/whisper-base",
+      "detectable": true,
+      "pattern": "AutoFeatureExtractor.from_pretrained"
+    },
+    {
+      "id": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+      "detectable": true,
+      "pattern": "AutoModelForSequenceClassification.from_pretrained"
+    }
+  ],
+  "_notes": ""
+}

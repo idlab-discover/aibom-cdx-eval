@@ -1,0 +1,18 @@
+[submodule "tools/aibom-generator"]
+	path = tools/aibom-generator
+	url = https://github.com/GenAI-Security-Project/aibom-generator.git
+[submodule "tools/akumar-aibom"]
+	path = tools/akumar-aibom
+	url = https://github.com/akumar0205/AIBOM.git
+[submodule "tools/jorisbot-aibom"]
+	path = tools/jorisbot-aibom
+	url = https://github.com/jorisbot288-boop/aibom.git
+[submodule "tools/lab700xorg-aisbom"]
+	path = tools/lab700xorg-aisbom
+	url = https://github.com/Lab700xOrg/aisbom.git
+[submodule "tools/trusera-aibom"]
+	path = tools/trusera-aibom
+	url = https://github.com/Trusera/ai-bom.git
+[submodule "tools/cisco-aibom"]
+	path = tools/cisco-aibom
+	url = https://github.com/cisco-ai-defense/aibom.git

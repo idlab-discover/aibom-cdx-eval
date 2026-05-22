@@ -1,0 +1,5 @@
+steps:
+  - name: encode
+    model: "BAAI/bge-large-en-v1.5"
+  - name: classify
+    model: "facebook/bart-large-mnli"

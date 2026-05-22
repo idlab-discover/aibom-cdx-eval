@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from scoring.normalize import normalize_model_id
+
+def _normalize_model_id(model_id: str) -> str:
+    """Lowercase and strip the org/ prefix for fuzzy matching."""
+    return model_id.lower().split("/")[-1] if "/" in model_id else model_id.lower()
 
 
 def score_discovery(
@@ -39,15 +42,15 @@ def score_discovery(
     gt_ids_exact: set[str] = {
         m["id"] for m in gt_models if m.get("detectable", True)
     }
-    gt_ids_lower: set[str] = {normalize_model_id(m) for m in gt_ids_exact}
+    gt_ids_lower: set[str] = {_normalize_model_id(m) for m in gt_ids_exact}
 
     detected_set: set[str] = set(detected_ids)
-    detected_lower: set[str] = {normalize_model_id(d) for d in detected_ids}
+    detected_lower: set[str] = {_normalize_model_id(d) for d in detected_ids}
 
     # True positives: exact match or fuzzy match
     tp_exact = detected_set & gt_ids_exact
     # Fuzzy: detected model-name matches a GT model-name (handles org-prefix differences)
-    tp_fuzzy_lower = (detected_lower - {normalize_model_id(d) for d in tp_exact}) & gt_ids_lower
+    tp_fuzzy_lower = (detected_lower - {_normalize_model_id(d) for d in tp_exact}) & gt_ids_lower
 
     tp = len(tp_exact) + len(tp_fuzzy_lower)
     fp = len(detected_ids) - tp

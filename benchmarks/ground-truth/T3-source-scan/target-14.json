@@ -1,0 +1,29 @@
+{
+  "_comment": "Ground truth for target-14 (synthetic). Annotated detectable model references.",
+  "_method": "Manual annotation from synthetic source files.",
+  "target": "target-14",
+  "target_path": "targets/target-14",
+  "models": [
+    {
+      "id": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+      "detectable": true,
+      "pattern": "SentenceTransformer()"
+    },
+    {
+      "id": "BAAI/bge-reranker-v2-m3",
+      "detectable": true,
+      "pattern": "Python const reranker_model"
+    },
+    {
+      "id": "microsoft/Florence-2-base",
+      "detectable": true,
+      "pattern": "AutoProcessor.from_pretrained"
+    },
+    {
+      "id": "openai/whisper-large-v3",
+      "detectable": true,
+      "pattern": "whisper.load_model"
+    }
+  ],
+  "_notes": ""
+}

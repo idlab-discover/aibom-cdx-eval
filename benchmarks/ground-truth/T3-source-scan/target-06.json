@@ -1,0 +1,29 @@
+{
+  "_comment": "Ground truth for target-06 (synthetic). Annotated detectable model references.",
+  "_method": "Manual annotation from synthetic source files.",
+  "target": "target-06",
+  "target_path": "targets/target-06",
+  "models": [
+    {
+      "id": "microsoft/phi-2",
+      "detectable": true,
+      "pattern": ".env HF_MODEL_ID"
+    },
+    {
+      "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "detectable": true,
+      "pattern": ".env EMBEDDING_MODEL"
+    },
+    {
+      "id": "cross-encoder/nli-deberta-v3-small",
+      "detectable": true,
+      "pattern": ".env RERANKER_MODEL"
+    },
+    {
+      "id": "stabilityai/stable-diffusion-xl-base-1.0",
+      "detectable": true,
+      "pattern": "requirements.txt comment"
+    }
+  ],
+  "_notes": ""
+}

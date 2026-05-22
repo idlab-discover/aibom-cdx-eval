@@ -1,8 +1,13 @@
 """
 Runner for lab700xorg-aisbom.
-Task: T3 — security scanning of HF models via binary introspection.
-Command: `uv run aisbom scan hf://<model_id> --output <file> --format json`
-Output: CycloneDX 1.6 JSON with security findings in vulnerabilities or properties.
+
+Task: T1_T2 — HF model-ID based AIBOM generation via zero-download introspection.
+Command: `uv run aisbom scan hf://<model_id> --output <file> --format json --no-fail-on-risk`
+Output: CycloneDX 1.6 JSON.
+
+Note: lab700xorg-aisbom scans binary ML artifacts (.pt, .pkl, .safetensors).
+It operates on HF model metadata via range-request header inspection (no download).
+It is placed in the HF-model-ID group (T1_T2/T4-G1) for fair comparison.
 """
 
 from __future__ import annotations
@@ -11,27 +16,22 @@ from pathlib import Path
 from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.score_security import score_security_cyclonedx
+from scoring.score_cdx_conformance import score_cdx_conformance
+from scoring.score_cdx_completeness import score_cdx_completeness
 
 
 class Lab700xorgAisbomRunner(BaseRunner):
-
-    def working_dir(self) -> Path:
-        return Path(self.tool_config["path"])
+    # working_dir() resolved by BaseRunner from config path (relative to EVAL_ROOT)
 
     def build_command(
         self, input_spec: str, output_dir: Path, run_env: dict
     ) -> list[str]:
-        # input_spec is a model ID like "mcpotato/42-eicar-street"
         output_file = output_dir / "sbom.json"
-        entry = self.tool_config.get("entry", ["uv", "run", "aisbom"])
-        return entry + [
-            "scan",
-            f"hf://{input_spec}",
-            "--output", str(output_file),
-            "--format", "json",
-            "--no-fail-on-risk",
-        ]
+        # Use the tool's own venv binary directly; uv run cannot resolve the
+        # poetry-format pyproject.toml entry point without a prior uv sync.
+        aisbom_bin = self.working_dir() / ".venv" / "bin" / "aisbom"
+        extra_flags = self.tool_config.get("tool_flags", [])
+        return [str(aisbom_bin), "scan", f"hf://{input_spec}", "--output", str(output_file), "--format", "json", "--no-fail-on-risk"] + extra_flags
 
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / "sbom.json"
@@ -40,9 +40,7 @@ class Lab700xorgAisbomRunner(BaseRunner):
     def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
         if output_path is None:
             return {}
-
-        ground_truth_path = Path(
-            self.task_config.get("current_dataset_ground_truth")
-            or self.task_config.get("ground_truth", "")
-        )
-        return score_security_cyclonedx(output_path, input_spec, ground_truth_path)
+        return {
+            **score_cdx_conformance(output_path),
+            **score_cdx_completeness(output_path),
+        }
