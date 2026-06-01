@@ -302,6 +302,99 @@ def _aggregate_reliability(
         }
 
 
+def _merge_completeness_detail(detail: dict[str, bool]) -> dict[str, bool]:
+    """Treat components[].X and metadata.component.X as the same logical field.
+
+    CycloneDX allows the primary subject component to live in either
+    ``metadata.component`` (BOM-of-one pattern) or ``components[]`` (inventory
+    pattern).  Both are valid; tools should not be penalised for choosing one
+    over the other.
+
+    For every ``components[].X`` path we OR its value with the corresponding
+    ``metadata.component.X`` value (and vice versa).  Then, to avoid counting
+    the same logical field twice, ``metadata.component.X`` paths that have a
+    matching ``components[].X`` counterpart are removed from the merged dict —
+    the merged result lives exclusively under the ``components[].X`` key.
+    """
+    PREFIX_COMP = "components[]."
+    PREFIX_META = "metadata.component."
+
+    merged: dict[str, bool] = {}
+    for path, val in detail.items():
+        if path.startswith(PREFIX_COMP):
+            rest = path[len(PREFIX_COMP):]
+            meta_path = PREFIX_META + rest
+            merged[path] = bool(val) or bool(detail.get(meta_path, False))
+        elif path.startswith(PREFIX_META):
+            rest = path[len(PREFIX_META):]
+            comp_path = PREFIX_COMP + rest
+            if comp_path in detail:
+                # Handled above under the components[].X key — skip to deduplicate.
+                continue
+            merged[path] = bool(val)
+        else:
+            merged[path] = bool(val)
+    return merged
+
+
+def _agg_completeness(
+    scores: list[dict],
+    detail_key: str,
+    fallback_pct_key: str,
+) -> dict | None:
+    """Aggregate completeness as field-breadth: fraction of schema paths the tool
+    fills in at least one run (after component-location merging).
+
+    Per-run mean is stored separately but breadth is the primary (.mean) value
+    because it captures tool *capability* — how many distinct CycloneDX fields
+    the tool actually implements — rather than template consistency per BOM.
+
+    Falls back to per-run mean of the raw stored pct for tools without stored
+    detail (e.g. v17 completeness).
+    """
+    union_true: set[str] = set()
+    total_paths: int | None = None
+    per_run_pcts: list[float] = []
+    n_with_detail = 0
+
+    for s in scores:
+        detail = s.get(detail_key)
+        if isinstance(detail, dict) and detail:
+            merged = _merge_completeness_detail(detail)
+            if total_paths is None:
+                total_paths = len(merged)
+            present = sum(1 for v in merged.values() if v)
+            per_run_pcts.append(round(present / total_paths * 100, 4) if total_paths else 0.0)
+            union_true.update(p for p, v in merged.items() if v)
+            n_with_detail += 1
+        else:
+            raw = s.get(fallback_pct_key)
+            if isinstance(raw, (int, float)):
+                per_run_pcts.append(float(raw))
+
+    if not per_run_pcts:
+        return None
+
+    if total_paths and n_with_detail > 0:
+        breadth = round(len(union_true) / total_paths * 100, 4)
+        mean_per_run = round(_mean(per_run_pcts), 4)
+        return {
+            # breadth = distinct merged paths filled in ≥1 run / total merged paths.
+            # Exposed as "mean" so downstream report/ranking code reads it transparently.
+            "mean":         breadth,
+            "mean_per_run": mean_per_run,
+            "distinct_paths_filled": len(union_true),
+            "total_paths":  total_paths,
+            "n":            n_with_detail,
+        }
+
+    # Fallback: no detail available, use per-run mean as-is.
+    return {
+        "mean": round(_mean(per_run_pcts), 4),
+        "n":    len(per_run_pcts),
+    }
+
+
 def _aggregate_cdx(
     summary: dict, sub_task: str, records: list[dict],
 ) -> None:
@@ -323,8 +416,8 @@ def _aggregate_cdx(
             "sub_task": sub_task,
             "total_runs": len(recs),
             "metrics": {
-                "cdx_completeness_pct_v16":      _agg_metric(scores, "cdx_completeness_pct_v16"),
-                "cdx_completeness_pct_v17":      _agg_metric(scores, "cdx_completeness_pct_v17"),
+                "cdx_completeness_pct_v16":      _agg_completeness(scores, "cdx_completeness_detail_v16", "cdx_completeness_pct_v16"),
+                "cdx_completeness_pct_v17":      _agg_completeness(scores, "cdx_completeness_detail_v17", "cdx_completeness_pct_v17"),
                 "cdx_conformance_pass_rate_v16": round(
                     sum(bool(v) for v in v16_valid) / max(len(v16_valid), 1), 4
                 ) if v16_valid else None,

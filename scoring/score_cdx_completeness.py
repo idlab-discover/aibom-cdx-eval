@@ -199,12 +199,14 @@ def score_cdx_completeness(output_path: Path) -> dict[str, Any]:
             "cdx_completeness_pct_v16":    float | None   (0–100),
             "cdx_completeness_pct_v17":    float | None   (0–100),
             "cdx_completeness_detail_v16": dict | None    (path → bool),
+            "cdx_completeness_detail_v17": dict | None    (path → bool),
         }
     """
     null_result: dict[str, Any] = {
         "cdx_completeness_pct_v16": None,
         "cdx_completeness_pct_v17": None,
         "cdx_completeness_detail_v16": None,
+        "cdx_completeness_detail_v17": None,
     }
 
     if output_path is None or not output_path.exists():
@@ -219,7 +221,7 @@ def score_cdx_completeness(output_path: Path) -> dict[str, Any]:
 
     for version_key, pct_key, detail_key in [
         ("v16", "cdx_completeness_pct_v16", "cdx_completeness_detail_v16"),
-        ("v17", "cdx_completeness_pct_v17", None),
+        ("v17", "cdx_completeness_pct_v17", "cdx_completeness_detail_v17"),
     ]:
         paths = _get_schema_paths(version_key)
         if not paths:

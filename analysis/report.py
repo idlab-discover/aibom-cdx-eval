@@ -683,8 +683,8 @@ def _mean_of(val: object) -> object:
 
 def _t4_table(entries: list[dict]) -> list[str]:
     cols = [
-        ("cdx_completeness_pct_v16",      "Completeness v1.6 (%)"),
-        ("cdx_completeness_pct_v17",      "Completeness v1.7 (%)"),
+        ("cdx_completeness_pct_v16",      "Field breadth v1.6 (%)"),
+        ("cdx_completeness_pct_v17",      "Field breadth v1.7 (%)"),
         ("cdx_conformance_pass_rate_v16", "Conformance v1.6 rate"),
         ("cdx_conformance_pass_rate_v17", "Conformance v1.7 rate"),
     ]
@@ -700,6 +700,19 @@ def _t4_table(entries: list[dict]) -> list[str]:
                 val = val.get("mean")
             cells.append(_fmt(val))
         lines.append(f"| {e['tool']} | " + " | ".join(cells) + " |")
+    lines += [
+        "",
+        "> **Field breadth** — fraction of distinct CycloneDX schema leaf paths the tool"
+        " ever populates across all benchmark runs (paths where `metadata.component.*`"
+        " and `components[].*` are treated as the same logical location). Denominator is"
+        " the total number of enumerable leaf paths in that schema version (~2 300 for"
+        " v1.6, ~2 600 for v1.7, depth-capped at 8). Higher breadth means the tool"
+        " implements a wider portion of the spec, not just a fixed template.",
+        ">",
+        "> **Conformance** — fraction of runs where the generated BOM validates"
+        " successfully against the official CycloneDX JSON Schema (Draft-07)."
+        " A value of 1.0 means every output was schema-valid.",
+    ]
     return lines
 
 
