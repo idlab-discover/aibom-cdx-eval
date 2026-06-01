@@ -88,6 +88,10 @@ def cli() -> None:
     "--limit", default=None, type=int,
     help="Cap the number of model IDs per model-id-list dataset (default: from config)."
 )
+@click.option(
+    "--cooldown", default=None, type=float,
+    help="Minutes to wait between tool/task groups (default: 5.0). E.g. --cooldown 0.5 = 30 s. Retry delay is always 30s."
+)
 def run_local(
     run_id: str | None,
     results_dir: str,
@@ -96,6 +100,7 @@ def run_local(
     skip_done: bool,
     workers: int,
     limit: int | None,
+    cooldown: int | None,
 ) -> None:
     """Run all jobs on the current machine. Use --workers N to run in parallel."""
     from orchestrator.checkpoint import Checkpoint
@@ -134,7 +139,7 @@ def run_local(
     done = failed = 0
 
     # ── inter-group cooldown (rate-limit guard) ───────────────────────────
-    INTER_GROUP_WAIT = 300  # 5 minutes between tool-task pairs
+    INTER_GROUP_WAIT = int((cooldown if cooldown is not None else 5.0) * 60)  # convert minutes → seconds
 
     if workers <= 1:
         # Sequential path: process one (tool, task) group at a time with a
@@ -446,15 +451,16 @@ def _run_job(job: dict, run_dir: Path, cfg: dict) -> Any:
     return result
 
 
-def _wait_between_groups(con: Console, seconds: int) -> None:
+def _wait_between_groups(con: Console, seconds: float) -> None:
     """Print a live countdown and sleep between tool-task groups."""
+    mins_display = seconds / 60
     con.print(
-        f"\n[bold yellow]⏸  Cooldown {seconds // 60}m between groups "
+        f"\n[bold yellow]⏸  Cooldown {mins_display:.1f}m between groups "
         f"(HF rate-limit guard)[/bold yellow]"
     )
     remaining = seconds
     while remaining > 0:
-        mins, secs = divmod(remaining, 60)
+        mins, secs = divmod(int(remaining), 60)
         con.print(f"  [dim]Waiting {mins}:{secs:02d} …[/dim]", end="\r")
         sleep_for = min(30, remaining)
         time.sleep(sleep_for)

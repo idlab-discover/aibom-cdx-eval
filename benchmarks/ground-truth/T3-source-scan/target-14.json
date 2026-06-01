@@ -7,22 +7,26 @@
     {
       "id": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
       "detectable": true,
-      "pattern": "SentenceTransformer()"
+      "pattern": "SentenceTransformer()",
+      "detectable_scope": "python_literal"
     },
     {
       "id": "BAAI/bge-reranker-v2-m3",
       "detectable": true,
-      "pattern": "Python const reranker_model"
+      "pattern": "Python const reranker_model",
+      "detectable_scope": "python_variable"
     },
     {
       "id": "microsoft/Florence-2-base",
       "detectable": true,
-      "pattern": "AutoProcessor.from_pretrained"
+      "pattern": "AutoProcessor.from_pretrained",
+      "detectable_scope": "python_variable"
     },
     {
       "id": "openai/whisper-large-v3",
       "detectable": true,
-      "pattern": "whisper.load_model"
+      "pattern": "whisper.load_model",
+      "detectable_scope": "python_literal"
     }
   ],
   "_notes": ""

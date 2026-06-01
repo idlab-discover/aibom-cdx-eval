@@ -7,22 +7,26 @@
     {
       "id": "microsoft/phi-2",
       "detectable": true,
-      "pattern": ".env HF_MODEL_ID"
+      "pattern": ".env HF_MODEL_ID",
+      "detectable_scope": "env_literal"
     },
     {
       "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
       "detectable": true,
-      "pattern": ".env EMBEDDING_MODEL"
+      "pattern": ".env EMBEDDING_MODEL",
+      "detectable_scope": "env_literal"
     },
     {
       "id": "cross-encoder/nli-deberta-v3-small",
       "detectable": true,
-      "pattern": ".env RERANKER_MODEL"
+      "pattern": ".env RERANKER_MODEL",
+      "detectable_scope": "env_literal"
     },
     {
       "id": "stabilityai/stable-diffusion-xl-base-1.0",
       "detectable": true,
-      "pattern": "requirements.txt comment"
+      "pattern": "requirements.txt comment",
+      "detectable_scope": "requirements_comment"
     }
   ],
   "_notes": ""

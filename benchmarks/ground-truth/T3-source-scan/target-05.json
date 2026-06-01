@@ -7,27 +7,32 @@
     {
       "id": "google-bert/bert-base-multilingual-cased",
       "detectable": true,
-      "pattern": "YAML config: model.name"
+      "pattern": "YAML config: model.name",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "sentence-transformers/all-MiniLM-L6-v2",
       "detectable": true,
-      "pattern": "YAML config: embedding_model"
+      "pattern": "YAML config: embedding_model",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
       "detectable": true,
-      "pattern": "YAML config: reranker.model_id"
+      "pattern": "YAML config: reranker.model_id",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "BAAI/bge-large-en-v1.5",
       "detectable": true,
-      "pattern": "YAML pipeline step"
+      "pattern": "YAML pipeline step",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "facebook/bart-large-mnli",
       "detectable": true,
-      "pattern": "YAML pipeline step"
+      "pattern": "YAML pipeline step",
+      "detectable_scope": "yaml_literal"
     }
   ],
   "_notes": ""

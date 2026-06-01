@@ -7,17 +7,20 @@
     {
       "id": "google/flan-t5-large",
       "detectable": true,
-      "pattern": "Jupyter cell AutoModel.from_pretrained"
+      "pattern": "Jupyter cell AutoModel.from_pretrained",
+      "detectable_scope": "notebook_literal"
     },
     {
       "id": "sentence-transformers/all-roberta-large-v1",
       "detectable": true,
-      "pattern": "Jupyter cell SentenceTransformer"
+      "pattern": "Jupyter cell SentenceTransformer",
+      "detectable_scope": "notebook_literal"
     },
     {
       "id": "stabilityai/stable-diffusion-2-1",
       "detectable": true,
-      "pattern": "Jupyter cell DiffusionPipeline.from_pretrained"
+      "pattern": "Jupyter cell DiffusionPipeline.from_pretrained",
+      "detectable_scope": "notebook_literal"
     }
   ],
   "_notes": ""

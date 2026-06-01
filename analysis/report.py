@@ -26,7 +26,19 @@ import click
 
 EVAL_ROOT = Path(__file__).parent.parent
 AGGREGATED_DIR = EVAL_ROOT / "results" / "aggregated"
-REPORTS_DIR = AGGREGATED_DIR / "reports"
+REPORTS_DIR    = AGGREGATED_DIR / "reports"
+RUNS_DIR       = EVAL_ROOT / "results" / "runs"
+GT_DIR         = EVAL_ROOT / "benchmarks" / "ground-truth" / "T3-source-scan"
+
+# HuggingFace organisations that publish only datasets (not model weights).
+# Used for FP categorisation; heuristic — does not require an API call.
+_DATASET_ORGS: frozenset[str] = frozenset({
+    "embedding-data", "bookcorpus", "legacy-datasets", "deepmind",
+    "nyu-mll", "stanfordnlp", "community-datasets", "defunct-datasets",
+    "flax-sentence-embeddings", "google-research-datasets", "eriktks",
+    "esnli", "svakulenk0", "djaym7", "cimec", "code-search-net",
+    "abisee", "wangwilliamyang", "mandarjoshi", "tasksource",
+})
 
 SUB_TASK_DESCRIPTIONS = {
     "T1":    "HF Model ID → AIBOM — Performance",
@@ -83,7 +95,7 @@ def _build_report(run_id: str, summary: dict) -> list[str]:
         elif sub_task == "T2":
             lines += _t2_table(entries)
         elif sub_task == "T3":
-            lines += _t3_table(entries)
+            lines += _t3_section(entries, run_id)
         elif sub_task in ("T4-G1", "T4-G2"):
             lines += _t4_table(entries)
         lines.append("")
@@ -102,8 +114,8 @@ def _t1_table(entries: list[dict]) -> list[str]:
 
 
 def _t2_table(entries: list[dict]) -> list[str]:
-    header = "| Tool | Success rate | Failure rate | timeout | network_error | parse_error | crash | missing_output | Retries (mean) |"
-    sep    = "|------|-------------|-------------|---------|---------------|-------------|-------|----------------|---------------|"
+    header = "| Tool | Success rate | Failure rate | timeout | network_error | unauthorized_download | parse_error | crash | missing_output | Retries (mean) |"
+    sep    = "|------|-------------|-------------|---------|---------------|----------------------|-------------|-------|----------------|---------------|"
     lines  = [header, sep]
     for e in sorted(entries, key=lambda x: x["tool"]):
         sr = _fmt(e.get("success_rate"))
@@ -114,6 +126,7 @@ def _t2_table(entries: list[dict]) -> list[str]:
             f"| {e['tool']} | {sr} | {fr}"
             f" | {br.get('timeout', 0)}"
             f" | {br.get('network_error', 0)}"
+            f" | {br.get('unauthorized_download', 0)}"
             f" | {br.get('parse_error', 0)}"
             f" | {br.get('crash', 0)}"
             f" | {br.get('missing_output', 0)}"
@@ -123,13 +136,549 @@ def _t2_table(entries: list[dict]) -> list[str]:
     return lines
 
 
-def _t3_table(entries: list[dict]) -> list[str]:
-    cols = [
-        ("f1",        "F1"),
-        ("precision", "Precision"),
-        ("recall",    "Recall"),
+# File-type scope that each T3 tool supports (inferred from README + source).
+# Used to annotate the report; does not affect scoring.
+_T3_TOOL_SCOPES: dict[str, str] = {
+    "aibomgen-cli":  "Python, YAML, JSON, .env, Dockerfile, JS/TS, Jupyter, Shell",
+    "akumar-aibom":  "Python (LangChain / cloud-provider class patterns only; no from_pretrained)",
+    "jorisbot-aibom": "Python (AST; HF transformers, OpenAI, Anthropic, LangChain, LlamaIndex)",
+    "trusera-aibom":  "Python, JS/TS, Dockerfile, Jupyter (21 SDK patterns, regex + AST via --deep)",
+}
+
+# ------------------------------------------------------------------ #
+# T3 — Ground-truth and results helpers                                #
+# ------------------------------------------------------------------ #
+
+def _load_all_gt() -> dict[str, dict]:
+    """Load all T3 ground-truth JSON files.
+
+    Returns a dict keyed by target name (e.g. ``"target-01"``), each value
+    containing the raw model list plus pre-computed id sets:
+    - ``all_ids``  — all detectable=True model IDs for this target
+    - ``py_ids``   — subset where detectable_scope == "python_literal"
+    """
+    result: dict[str, dict] = {}
+    for gt_file in sorted(GT_DIR.glob("target-*.json")):
+        target = gt_file.stem
+        try:
+            data = json.loads(gt_file.read_text())
+        except Exception:
+            continue
+        models: list[dict] = data.get("models", [])
+        result[target] = {
+            "models": models,
+            "all_ids": {m["id"] for m in models if m.get("detectable", True)},
+            "py_ids": {
+                m["id"] for m in models
+                if m.get("detectable", True)
+                and m.get("detectable_scope") == "python_literal"
+            },
+        }
+    return result
+
+
+def _compute_scope_breakdown(all_gt: dict[str, dict]) -> dict[str, int]:
+    """Count detectable models by detectable_scope across all targets."""
+    counts: dict[str, int] = {}
+    for td in all_gt.values():
+        for m in td["models"]:
+            if not m.get("detectable", True):
+                continue
+            scope = m.get("detectable_scope", "unknown")
+            counts[scope] = counts.get(scope, 0) + 1
+    return counts
+
+
+def _compute_zero_py_targets(all_gt: dict[str, dict]) -> list[str]:
+    """Return sorted target names that have zero python_literal models."""
+    return sorted(t for t, td in all_gt.items() if not td["py_ids"])
+
+
+def _load_t3_metrics(run_id: str) -> dict[tuple[str, str], dict]:
+    """Load every T3 metrics.json for a run.
+
+    Returns a dict keyed by ``(tool, dataset)``.  If multiple slugs exist for
+    the same pair, the last one encountered (alphabetically by path) is used.
+    """
+    result: dict[tuple[str, str], dict] = {}
+    run_dir = RUNS_DIR / run_id
+    if not run_dir.exists():
+        return result
+    for metrics_path in sorted(run_dir.glob("*/T3_T4G2/*/*/metrics.json")):
+        parts = metrics_path.parts
+        try:
+            t3_idx = next(i for i, p in enumerate(parts) if p == "T3_T4G2")
+        except StopIteration:
+            continue
+        tool    = parts[t3_idx - 1]
+        dataset = parts[t3_idx + 1]
+        try:
+            result[(tool, dataset)] = json.loads(metrics_path.read_text())
+        except Exception:
+            pass
+    return result
+
+
+def _normalize_id(model_id: str) -> str:
+    return model_id.lower().strip()
+
+
+def _fuzzy_id(model_id: str) -> str:
+    """Lowercase + strip org prefix for fuzzy matching (mirrors score_discovery.py)."""
+    lower = model_id.lower().strip()
+    return lower.split("/")[-1] if "/" in lower else lower
+
+
+def _get_fp_ids(detected_ids: list[str], gt_all_ids: set[str]) -> list[str]:
+    """Return the subset of detected_ids that are false positives."""
+    gt_lower   = {_normalize_id(g) for g in gt_all_ids}
+    gt_fuzzy   = {_fuzzy_id(g) for g in gt_all_ids}
+    fp_ids: list[str] = []
+    for d in detected_ids:
+        if _normalize_id(d) not in gt_lower and _fuzzy_id(d) not in gt_fuzzy:
+            fp_ids.append(d)
+    return fp_ids
+
+
+def _categorize_fp(fp_id: str) -> str:
+    """Heuristically categorise a false-positive model ID."""
+    org, sep, _ = fp_id.partition("/")
+    org_lower = org.lower()
+    # Local path, template, or placeholder
+    if fp_id.startswith("/") or any(c in fp_id for c in ("{", "$", "<", ">")):
+        return "template_or_local"
+    if not sep or org_lower in ("templates",):
+        return "template_or_local"
+    # Known dataset-only HF organisations
+    if org_lower in _DATASET_ORGS:
+        return "dataset_confusion"
+    if "dataset" in org_lower or "corpus" in org_lower:
+        return "dataset_confusion"
+    return "not_in_benchmark"
+
+
+# ------------------------------------------------------------------ #
+# T3 — Section renderer                                                #
+# ------------------------------------------------------------------ #
+
+def _t3_section(entries: list[dict], run_id: str) -> list[str]:
+    """Render T3 with tool capability table, dual-scope results, and analysis."""
+    lines: list[str] = []
+
+    # Load data (GT is static; metrics depend on run_id)
+    all_gt          = _load_all_gt()
+    metrics_by_key  = _load_t3_metrics(run_id)
+    scope_breakdown = _compute_scope_breakdown(all_gt)
+    zero_py_targets = _compute_zero_py_targets(all_gt)
+    n_targets       = len(all_gt)
+    py_count        = scope_breakdown.get("python_literal", 0)
+
+    tools   = sorted({t for (t, _) in metrics_by_key})
+    targets = sorted({d for (_, d) in metrics_by_key})
+
+    # ── Tool capability note ───────────────────────────────────────────────
+    lines += [
+        "### Tool scanning capabilities",
+        "",
+        "| Tool | File types / patterns scanned |",
+        "|------|------------------------------|",
     ]
-    return _metric_table(entries, cols)
+    for tool in sorted(_T3_TOOL_SCOPES):
+        lines.append(f"| {tool} | {_T3_TOOL_SCOPES[tool]} |")
+
+    # Fairness note — dynamic zero-py target list
+    zero_py_nums = ", ".join(t.replace("target-0", "").replace("target-", "") for t in zero_py_targets)
+    lines += [
+        "",
+        f"> **Fairness note** \u2014 Targets {zero_py_nums} have no hardcoded model strings in Python files "
+        "(model IDs only appear in YAML, .env, Dockerfile, JSON, TOML, JS, or shell files). "
+        "The \u201cPython string-literal\u201d table below excludes these targets from scoring.",
+        "",
+    ]
+
+    # Scope breakdown — dynamic
+    breakdown_parts = "; ".join(
+        f"{scope}: {count}"
+        for scope, count in sorted(scope_breakdown.items(), key=lambda kv: -kv[1])
+    )
+    lines += [
+        f"> Ground-truth scope breakdown across {n_targets} targets \u2014 {breakdown_parts}.",
+        "",
+    ]
+
+    # ── Full-scope table ───────────────────────────────────────────────────
+    lines += [
+        f"### Results \u2014 full benchmark (all {n_targets} targets, all scopes)",
+        "",
+    ]
+    lines += _t3_table_full(entries)
+    lines.append("")
+
+    # ── Python-literal scoped table ────────────────────────────────────────
+    lines += [
+        "### Results \u2014 Python string-literal scope (fair subset)",
+        "",
+        f"> Counts only models whose ID is a **hardcoded string constant in a `.py` file** "
+        f"(e.g. `from_pretrained(\"bert-base-uncased\")`, `ChatOpenAI(model_name=\"gpt-4o\")`) "
+        f"\u2014 {py_count} models across {n_targets} targets. "
+        "This is the scope where all four tools can compete equally. "
+        "FP counts are unchanged.",
+        "",
+    ]
+    lines += _t3_table_py(entries)
+    lines.append("")
+
+    # ── Per-target grid ────────────────────────────────────────────────────
+    lines += ["### Per-target breakdown (TP / FP / FN \u2014 full scope)", ""]
+    lines += _t3_per_target_grid(metrics_by_key, tools, targets, set(zero_py_targets))
+    lines.append("")
+
+    # ── Anomaly / investigation notes ─────────────────────────────────────
+    notes = _t3_investigation_notes(metrics_by_key, tools, targets)
+    if notes:
+        lines += notes
+        lines.append("")
+
+    # ── FP analysis ───────────────────────────────────────────────────────
+    lines += ["### False positive analysis", ""]
+    lines += _t3_fp_analysis(metrics_by_key, all_gt)
+    lines.append("")
+
+    # ── FN analysis ───────────────────────────────────────────────────────
+    lines += ["### False negative analysis (python-literal scope)", ""]
+    lines += _t3_fn_analysis(metrics_by_key, all_gt)
+
+    return lines
+
+
+# ------------------------------------------------------------------ #
+# T3 — Results tables                                                  #
+# ------------------------------------------------------------------ #
+
+def _t3_table_full(entries: list[dict]) -> list[str]:
+    header = "| Tool | F1 | Precision | Recall | TP | FP | FN | FP/scan | 0-detect |"
+    sep    = "|------|---|---|---|---|---|---|---|---|"
+    lines  = [header, sep]
+    for e in sorted(entries, key=lambda x: x["tool"]):
+        m = e.get("metrics", {})
+        lines.append(
+            f"| {e['tool']}"
+            f" | {_fmt(_mean_of(m.get('f1')))}"
+            f" | {_fmt(_mean_of(m.get('precision')))}"
+            f" | {_fmt(_mean_of(m.get('recall')))}"
+            f" | {m.get('tp_total', '—')}"
+            f" | {m.get('fp_total', '—')}"
+            f" | {m.get('fn_total', '—')}"
+            f" | {_fmt(m.get('fp_per_target_mean'))}"
+            f" | {_fmt(m.get('zero_detect_rate'))} |"
+        )
+    return lines
+
+
+def _t3_table_py(entries: list[dict]) -> list[str]:
+    header = "| Tool | F1 (py) | Precision (py) | Recall (py) | TP (py) | FP | FN (py) |"
+    sep    = "|------|---|---|---|---|---|---|"
+    lines  = [header, sep]
+    for e in sorted(entries, key=lambda x: x["tool"]):
+        m = e.get("metrics", {})
+        lines.append(
+            f"| {e['tool']}"
+            f" | {_fmt(_mean_of(m.get('f1_py')))}"
+            f" | {_fmt(_mean_of(m.get('precision_py')))}"
+            f" | {_fmt(_mean_of(m.get('recall_py')))}"
+            f" | {m.get('tp_py_total', '—')}"
+            f" | {m.get('fp_total', '—')}"
+            f" | {m.get('fn_py_total', '—')} |"
+        )
+    return lines
+
+
+# ------------------------------------------------------------------ #
+# T3 — Analysis sections                                               #
+# ------------------------------------------------------------------ #
+
+def _t3_per_target_grid(
+    metrics_by_key: dict[tuple[str, str], dict],
+    tools: list[str],
+    targets: list[str],
+    zero_py_set: set[str],
+) -> list[str]:
+    """Render a tool × target matrix of TP/FP/FN counts (full scope)."""
+    header_cells = [
+        f"{t.replace('target-', '')}\\*" if t in zero_py_set
+        else t.replace("target-", "")
+        for t in targets
+    ]
+    header = "| Tool | " + " | ".join(header_cells) + " |"
+    sep    = "|------|" + "|".join(["---"] * len(targets)) + "|"
+    lines  = [header, sep]
+
+    for tool in tools:
+        cells = []
+        for target in targets:
+            key = (tool, target)
+            if key not in metrics_by_key:
+                cells.append("\u2014")
+                continue
+            m = metrics_by_key[key]
+            if not m.get("success", True):
+                cells.append("FAIL")
+                continue
+            scores = m.get("scores", {})
+            tp = scores.get("tp")
+            fp = scores.get("fp")
+            fn = scores.get("fn")
+            cells.append(f"{tp}/{fp}/{fn}" if tp is not None else "\u2014")
+        lines.append(f"| {tool} | " + " | ".join(cells) + " |")
+
+    lines += [
+        "",
+        "_Cells: TP / FP / FN. "
+        "Columns marked \\* have zero python\\_literal models. "
+        "FAIL = tool produced no output artifact._",
+    ]
+    return lines
+
+
+def _t3_investigation_notes(
+    metrics_by_key: dict[tuple[str, str], dict],
+    tools: list[str],
+    targets: list[str],
+) -> list[str]:
+    """Emit warning blocks for trusera detection anomaly and aibomgen-cli failures."""
+    lines: list[str] = []
+
+    # trusera: detection by target
+    trusera_zero: list[str] = []
+    trusera_nonzero: list[str] = []
+    for target in sorted(targets):
+        key = ("trusera-aibom", target)
+        m = metrics_by_key.get(key)
+        if m is None or not m.get("success", True):
+            continue
+        detected = m.get("scores", {}).get("detected_ids", [])
+        (trusera_nonzero if detected else trusera_zero).append(target)
+
+    if trusera_nonzero or trusera_zero:
+        n_run = len(trusera_nonzero) + len(trusera_zero)
+        nonzero_nums = ", ".join(t.replace("target-", "") for t in trusera_nonzero)
+        # Determine whether trusera was run with --deep: if most zero-detect targets
+        # are targets that genuinely have no python_literal models, --deep was used.
+        # Heuristic: if trusera detected on target-01 (which always has py models),
+        # --deep was active; otherwise, assume regex-only mode.
+        target01_key = ("trusera-aibom", "target-01")
+        target01_metrics = metrics_by_key.get(target01_key, {})
+        target01_detected = target01_metrics.get("scores", {}).get("detected_ids", [])
+        trusera_used_deep = len(target01_detected) > 0
+
+        lines += ["### Notes", ""]
+        if trusera_used_deep:
+            zero_nums = ", ".join(t.replace("target-", "") for t in trusera_zero)
+            lines.append(
+                f"> **trusera-aibom** was run with `--deep` (AST mode). "
+                "Trusera's `--deep` flag enables detection of `from_pretrained(\"…\")` calls, "
+                "LangChain constructors, and raw SDK `.create(model=)` calls via AST analysis — "
+                "in addition to the default regex-on-import-statement pass. "
+                f"Targets with zero detections ({zero_nums}) have no python_literal models "
+                "or contain only YAML/env/Dockerfile-based model references outside trusera's scan scope."
+            )
+        else:
+            lines.append(
+                f"> \u26a0\ufe0f **trusera-aibom** was run in **default (regex-only) mode** without `--deep`. "
+                "Trusera documents that `ai-bom scan . --deep` enables AST-based detection of function calls "
+                "and string literals; the default regex mode only fires when a recognised library import statement "
+                "is present in the same file (`from transformers import \u2026`, `from sentence_transformers import \u2026`). "
+                f"Only targets {nonzero_nums} had matching import headers; all others returned zero detections. "
+                "**Scores reflect regex-only capability; re-running with `--deep` may significantly improve recall.**"
+            )
+
+    # aibomgen-cli: failed targets
+    cli_failed = [
+        t.replace("target-", "") for t in sorted(targets)
+        if ("aibomgen-cli", t) in metrics_by_key
+        and not metrics_by_key[("aibomgen-cli", t)].get("success", True)
+    ]
+    if cli_failed:
+        lines += [
+            "",
+            f"> \u26a0\ufe0f **aibomgen-cli** produced no output artifact on targets "
+            f"{', '.join(cli_failed)}. "
+            "Targets 16/18 use cloud-API patterns (ChatOpenAI, raw SDK calls) not in the tool\u2019s detection scope. "
+            "Targets 06/10 (`.env` / YAML-only) are within scope; those failures are likely runner issues.",
+        ]
+
+    return lines
+
+
+def _t3_fp_analysis(
+    metrics_by_key: dict[tuple[str, str], dict],
+    all_gt: dict[str, dict],
+) -> list[str]:
+    """Render a per-tool FP categorisation table."""
+    tools = sorted({t for (t, _) in metrics_by_key})
+    tool_cats: dict[str, dict[str, int]] = {}
+    tool_fail: dict[str, list[str]] = {}
+
+    for tool in tools:
+        cats: dict[str, int] = {
+            "dataset_confusion": 0,
+            "not_in_benchmark":  0,
+            "template_or_local": 0,
+        }
+        fails: list[str] = []
+        for target, gt_data in sorted(all_gt.items()):
+            m = metrics_by_key.get((tool, target))
+            if m is None:
+                continue
+            if not m.get("success", True):
+                fails.append(target.replace("target-", ""))
+                continue
+            detected = m.get("scores", {}).get("detected_ids", [])
+            for fp_id in _get_fp_ids(detected, gt_data["all_ids"]):
+                cat = _categorize_fp(fp_id)
+                cats[cat] = cats.get(cat, 0) + 1
+        tool_cats[tool] = cats
+        if fails:
+            tool_fail[tool] = fails
+
+    header = "| Tool | Total FP | Dataset confusion | Not in benchmark | Template / local |"
+    sep    = "|------|---|---|---|---|"
+    lines  = [header, sep]
+    for tool in tools:
+        s = tool_cats[tool]
+        total = sum(s.values())
+        lines.append(
+            f"| {tool}"
+            f" | {total}"
+            f" | {s['dataset_confusion']}"
+            f" | {s['not_in_benchmark']}"
+            f" | {s['template_or_local']} |"
+        )
+
+    lines += [
+        "",
+        "> *Dataset confusion* = `org/name`-format string extracted from a Hugging Face dataset repo "
+        "(e.g. `embedding-data/*`, `bookcorpus/bookcorpus`, `legacy-datasets/wikipedia`). "
+        "*Not in benchmark* = valid model-format ID not covered by the benchmark ground truth.",
+    ]
+
+    if tool_fail:
+        fail_strs = [f"**{t}**: targets {', '.join(sorted(ts))}" for t, ts in sorted(tool_fail.items())]
+        lines += ["", f"> Failed targets excluded from FP counts: {'; '.join(fail_strs)}."]
+
+    return lines
+
+
+def _t3_fn_analysis(
+    metrics_by_key: dict[tuple[str, str], dict],
+    all_gt: dict[str, dict],
+) -> list[str]:
+    """Render a per-tool FN categorisation table for python-literal scope."""
+    # Pattern keywords for classification
+    _HF_KW   = (
+        "from_pretrained", "SentenceTransformer", "CrossEncoder", "pipeline(",
+        "hf_hub_download", "evaluate.load", "InferenceClient", "load_model(",
+        "AutoModel", "AutoTokenizer", "AutoFeatureExtractor", "AutoConfig",
+        "whisper.load_model",
+    )
+    _CONS_KW = (
+        "ChatOpenAI", "ChatAnthropic", "Ollama(", "BedrockChat",
+        "AzureChatOpenAI", "VertexAI", "HuggingFaceHub",
+    )
+    _SDK_KW  = (
+        ".create(model=", "completions.create", "messages.create",
+        ".invoke(model=", "chat.completions",
+    )
+    # Cloud provider model-ID prefixes (bare IDs without an org/ prefix).
+    _CLOUD_ID_PREFIXES = ("gpt-", "claude-", "gemini-", "command-r", "o1-", "o3-")
+
+    def _classify(gt_model: dict) -> str:
+        pattern  = gt_model.get("pattern", "")
+        model_id = gt_model.get("id", "")
+        if pattern:
+            if any(k in pattern for k in _HF_KW):
+                return "hf_family"
+            if any(k in pattern for k in _CONS_KW):
+                return "cloud_constructor"
+            if any(k in pattern for k in _SDK_KW):
+                return "cloud_sdk_method"
+        # Empty-pattern fallback: use model ID shape.
+        if "/" in model_id:
+            # org/name format — assume HF ecosystem unless we know otherwise.
+            return "hf_family"
+        # Bare model name (no org prefix) — cloud provider IDs land here.
+        if any(model_id.lower().startswith(p) for p in _CLOUD_ID_PREFIXES):
+            return "cloud_sdk_method"
+        return "other"
+
+    # Build id → model-record lookup
+    id_to_record: dict[str, dict] = {
+        m["id"]: m
+        for td in all_gt.values()
+        for m in td["models"]
+    }
+
+    tools = sorted({t for (t, _) in metrics_by_key})
+    tool_stats: dict[str, dict[str, int]] = {}
+
+    for tool in tools:
+        cats: dict[str, int] = {
+            "hf_family": 0, "cloud_constructor": 0,
+            "cloud_sdk_method": 0, "other": 0,
+        }
+        for target, gt_data in sorted(all_gt.items()):
+            m = metrics_by_key.get((tool, target))
+            py_ids = gt_data["py_ids"]
+            if not py_ids:
+                continue
+            if m is None or not m.get("success", True):
+                # Treat all py GT models as FN when run failed
+                for gt_id in py_ids:
+                    cats[_classify(id_to_record.get(gt_id, {}))] += 1
+                continue
+            detected = m.get("scores", {}).get("detected_ids", [])
+            det_lower = {_normalize_id(d) for d in detected}
+            det_fuzzy = {_fuzzy_id(d) for d in detected}
+            for gt_id in py_ids:
+                if _normalize_id(gt_id) not in det_lower and _fuzzy_id(gt_id) not in det_fuzzy:
+                    cats[_classify(id_to_record.get(gt_id, {}))] += 1
+        tool_stats[tool] = cats
+
+    header = "| Tool | FN total (py) | HF family | Cloud constructor | Cloud SDK method | Other |"
+    sep    = "|------|---|---|---|---|---|"
+    lines  = [header, sep]
+    for tool in tools:
+        s = tool_stats[tool]
+        total = sum(s.values())
+        lines.append(
+            f"| {tool}"
+            f" | {total}"
+            f" | {s['hf_family']}"
+            f" | {s['cloud_constructor']}"
+            f" | {s['cloud_sdk_method']}"
+            f" | {s['other']} |"
+        )
+
+    lines += [
+        "",
+        "> *HF family* = `from_pretrained` / `SentenceTransformer` / `pipeline()` and similar. "
+        "*Cloud constructor* = `ChatOpenAI(model_name=)` / `ChatAnthropic(model=)` / `Ollama(model=)` (LangChain-style). "
+        "*Cloud SDK method* = `openai_client.chat.completions.create(model=)` / `anthropic_client.messages.create(model=)` (raw SDK).",
+        "",
+        "> **akumar-aibom**: HF family FNs are by design. "
+        "Cloud SDK method FNs (target-18: `gpt-4o`, `claude-3-5-haiku-20241022`) are a genuine gap "
+        "\u2014 detects LangChain constructors but not raw SDK `.create()` calls. "
+        "**jorisbot-aibom**: misses all cloud-constructor patterns despite declaring that scope; "
+        "the required LangChain/OpenAI packages may not be installed in the runner environment.",
+    ]
+    return lines
+
+
+def _mean_of(val: object) -> object:
+    """Extract the mean from an aggregated {mean, min, max, n} dict, or return the value as-is."""
+    if isinstance(val, dict):
+        return val.get("mean")
+    return val
 
 
 def _t4_table(entries: list[dict]) -> list[str]:

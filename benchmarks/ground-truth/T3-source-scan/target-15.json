@@ -7,32 +7,38 @@
     {
       "id": "meta-llama/Meta-Llama-3-8B-Instruct",
       "detectable": true,
-      "pattern": "REGISTRY dict + YAML + Dockerfile"
+      "pattern": "REGISTRY dict + YAML + Dockerfile",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "sentence-transformers/all-MiniLM-L6-v2",
       "detectable": true,
-      "pattern": "REGISTRY dict + YAML"
+      "pattern": "REGISTRY dict + YAML",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "cross-encoder/ms-marco-MiniLM-L-12-v2",
       "detectable": true,
-      "pattern": "REGISTRY dict"
+      "pattern": "REGISTRY dict",
+      "detectable_scope": "python_variable"
     },
     {
       "id": "openai/clip-vit-base-patch32",
       "detectable": true,
-      "pattern": "REGISTRY dict"
+      "pattern": "REGISTRY dict",
+      "detectable_scope": "python_variable"
     },
     {
       "id": "Xenova/gpt2",
       "detectable": true,
-      "pattern": "TypeScript const"
+      "pattern": "TypeScript const",
+      "detectable_scope": "js_literal"
     },
     {
       "id": "Xenova/all-MiniLM-L6-v2",
       "detectable": true,
-      "pattern": "TypeScript const"
+      "pattern": "TypeScript const",
+      "detectable_scope": "js_literal"
     }
   ],
   "_notes": ""

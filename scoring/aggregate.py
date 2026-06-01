@@ -111,10 +111,7 @@ def _build_summary(records: list[dict]) -> dict[str, Any]:
                      "fields_present", "output_size_bytes"],
     )
     _aggregate_reliability(summary, "T2", t1t2_records)
-    _aggregate_section(
-        summary, "T3", t3t4g2_records,
-        metric_keys=["precision", "recall", "f1"],
-    )
+    _aggregate_discovery(summary, "T3", t3t4g2_records)
     _aggregate_cdx(summary, "T4-G1", [r for r in t1t2_records if _has_cdx(r)])
     _aggregate_cdx(summary, "T4-G2", [r for r in t3t4g2_records if _has_cdx(r)])
 
@@ -155,6 +152,122 @@ def _aggregate_section(
                 } if duration_vals else None,
             },
         }
+
+
+def _aggregate_discovery(
+    summary: dict, sub_task: str, records: list[dict],
+) -> None:
+    """Aggregate T3 discovery metrics: float stats plus TP/FP/FN totals.
+
+    Produces two sets of metrics:
+    - Full ("_all"): all detectable=True models in ground truth.
+    - Python-literal ("_py"): only models whose detectable_scope == "python_literal",
+      the common-denominator pattern every scanner can reasonably attempt.
+    """
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_tool[r["tool"]].append(r)
+
+    for tool, recs in sorted(by_tool.items()):
+        key = f"{tool}::{sub_task}"
+        scores = [r.get("scores", {}) for r in recs]
+        successes = [r for r in recs if r.get("success")]
+
+        # ── Full metrics (all detectable models) ──────────────────────────────
+        float_metrics = {m: _agg_metric(scores, m) for m in ["precision", "recall", "f1"]}
+        tp_total  = sum(s.get("tp") or 0 for s in scores)
+        fp_total  = sum(s.get("fp") or 0 for s in scores)
+        fn_total  = sum(s.get("fn") or 0 for s in scores)
+        fp_vals   = [float(s["fp"]) for s in scores if s.get("fp") is not None]
+        fp_per_target = _mean(fp_vals)
+        zero_detect = sum(1 for s in scores if s.get("tp") == 0 and s.get("fp") == 0)
+        zero_detect_rate = round(zero_detect / max(len(recs), 1), 4)
+
+        # ── Python-literal scoped metrics ─────────────────────────────────────
+        # Pre-computed _py fields may not exist in older metrics.json runs.
+        # Recompute on-the-fly from detected_ids + ground truth scope annotations.
+        py_scores = [_compute_py_scores(r) for r in recs]
+        py_float_metrics = {
+            m + "_py": _agg_metric(py_scores, m + "_py")
+            for m in ["precision", "recall", "f1"]
+        }
+        tp_py_total = sum(s.get("tp_py") or 0 for s in py_scores)
+        fp_py_total = sum(s.get("fp_py") or 0 for s in py_scores)
+        fn_py_total = sum(s.get("fn_py") or 0 for s in py_scores)
+
+        summary[key] = {
+            "tool":         tool,
+            "sub_task":     sub_task,
+            "total_runs":   len(recs),
+            "successful":   len(successes),
+            "success_rate": round(len(successes) / max(len(recs), 1), 4),
+            "metrics": {
+                **float_metrics,
+                "tp_total":           tp_total,
+                "fp_total":           fp_total,
+                "fn_total":           fn_total,
+                "fp_per_target_mean": fp_per_target,
+                "zero_detect_rate":   zero_detect_rate,
+                **py_float_metrics,
+                "tp_py_total":        tp_py_total,
+                "fp_py_total":        fp_py_total,
+                "fn_py_total":        fn_py_total,
+            },
+        }
+
+
+_GT_DIR = EVAL_ROOT / "benchmarks" / "ground-truth" / "T3-source-scan"
+
+
+def _normalize(model_id: str) -> str:
+    """Lowercase + strip whitespace for fuzzy model-ID matching."""
+    return model_id.strip().lower()
+
+
+def _compute_py_scores(record: dict) -> dict:
+    """Compute python_literal-scoped TP/FP/FN/precision/recall/f1 for one run.
+
+    Uses detected_ids from the existing metrics.json and the detectable_scope
+    annotations in the ground truth JSON.  FP is computed against the full
+    ground truth so that detecting a non-python_literal model is not penalised
+    as a false positive in the scoped score.
+    """
+    dataset = record.get("dataset", "")
+    gt_path = _GT_DIR / f"{dataset}.json"
+    if not gt_path.exists():
+        return {}
+
+    with gt_path.open() as f:
+        gt_data = json.load(f)
+
+    models = gt_data.get("models", [])
+    gt_all_norm  = {_normalize(m["id"]) for m in models if m.get("detectable")}
+    gt_py_norm   = {_normalize(m["id"]) for m in models
+                    if m.get("detectable") and m.get("detectable_scope") == "python_literal"}
+
+    detected_raw: list[str] = record.get("scores", {}).get("detected_ids") or []
+    detected_norm = {_normalize(d) for d in detected_raw}
+
+    tp_py = len(detected_norm & gt_py_norm)
+    fn_py = len(gt_py_norm - detected_norm)
+    # FP: detected something NOT in full ground truth at all
+    fp    = len(detected_norm - gt_all_norm)
+
+    precision_py = tp_py / (tp_py + fp) if (tp_py + fp) > 0 else None
+    recall_py    = tp_py / (tp_py + fn_py) if (tp_py + fn_py) > 0 else None
+    if precision_py is not None and recall_py is not None and (precision_py + recall_py) > 0:
+        f1_py = 2 * precision_py * recall_py / (precision_py + recall_py)
+    else:
+        f1_py = None
+
+    return {
+        "tp_py": tp_py,
+        "fp_py": fp,
+        "fn_py": fn_py,
+        "precision_py": precision_py,
+        "recall_py":    recall_py,
+        "f1_py":        f1_py,
+    }
 
 
 def _aggregate_reliability(

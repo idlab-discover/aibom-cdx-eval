@@ -1,8 +1,12 @@
 """
 Runner for trusera-aibom (ai-bom).
 
-Task: T3_T4G2 — `uv run ai-bom scan <source_dir> -f cyclonedx -o <output_file>`
+Task: T3_T4G2 — `uv run ai-bom scan <source_dir> --deep -f cyclonedx -o <output_file>`
 Output: CycloneDX JSON with trusera extensions.
+
+--deep enables AST-based detection (function calls, string literals) in addition
+to the default regex mode.  Without it, the scanner only fires when a recognised
+library import statement is present in the same file as the usage pattern.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ class TruseraAibomRunner(BaseRunner):
     ) -> list[str]:
         output_file = output_dir / "ai-bom.cdx.json"
         entry = self.tool_config.get("entry", ["uv", "run", "ai-bom"])
-        return entry + ["scan", input_spec, "-f", "cyclonedx", "-o", str(output_file), "--quiet"]
+        return entry + ["scan", input_spec, "--deep", "-f", "cyclonedx", "-o", str(output_file), "--quiet"]
 
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / "ai-bom.cdx.json"

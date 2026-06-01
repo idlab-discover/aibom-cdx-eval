@@ -219,4 +219,19 @@ tasks:
         path: "targets/target-15"
         type: source-dir
         ground_truth: "benchmarks/ground-truth/T3-source-scan/target-15.json"
+      - id: target-16
+        path: "targets/target-16"
+        type: source-dir
+        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-16.json"
+        notes: "Cloud-AI chatbot (LangChain + OpenAI + Anthropic + Ollama). Tests cloud-API class-instantiation patterns; no HuggingFace transformers."
+      - id: target-17
+        path: "targets/target-17"
+        type: source-dir
+        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-17.json"
+        notes: "Hybrid RAG: local HuggingFace embeddings (from_pretrained + SentenceTransformer) + cloud LLM generation (ChatOpenAI + ChatAnthropic). Tests tools that span both pattern families."
+      - id: target-18
+        path: "targets/target-18"
+        type: source-dir
+        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-18.json"
+        notes: "Multi-agent pipeline: direct OpenAI/Anthropic SDK clients (model= in .create() calls) + Ollama class instantiation + YAML config. Tests deeper extraction beyond class constructors."
     scorers: [discovery, cdx_conformance, cdx_completeness]

@@ -7,17 +7,20 @@
     {
       "id": "google-bert/bert-base-cased",
       "detectable": true,
-      "pattern": "shell + Python from_pretrained"
+      "pattern": "shell + Python from_pretrained",
+      "detectable_scope": "shell_literal"
     },
     {
       "id": "openai-community/gpt2-medium",
       "detectable": true,
-      "pattern": "shell script from_pretrained"
+      "pattern": "shell script from_pretrained",
+      "detectable_scope": "shell_literal"
     },
     {
       "id": "FacebookAI/roberta-base",
       "detectable": true,
-      "pattern": "shell script from_pretrained"
+      "pattern": "shell script from_pretrained",
+      "detectable_scope": "shell_literal"
     }
   ],
   "_notes": ""

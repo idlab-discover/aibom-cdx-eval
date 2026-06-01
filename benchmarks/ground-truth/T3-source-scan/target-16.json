@@ -1,0 +1,32 @@
+{
+  "_comment": "Ground truth for target-16 (synthetic). Cloud-AI chatbot using LangChain with OpenAI, Anthropic, and Ollama. All model IDs appear as string literals in Python class instantiation calls — the primary detection pattern for akumar-aibom and other cloud-AI scanners. aibomgen-cli (HuggingFace-only) cannot detect any of these.",
+  "_method": "Manual annotation from target-16/app.py.",
+  "target": "target-16",
+  "target_path": "targets/target-16",
+  "models": [
+    {
+      "id": "gpt-4o",
+      "detectable": true,
+      "pattern": "ChatOpenAI(model_name=\"gpt-4o\")",
+      "detectable_scope": "python_literal"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "detectable": true,
+      "pattern": "ChatOpenAI(model_name=\"gpt-4o-mini\")",
+      "detectable_scope": "python_literal"
+    },
+    {
+      "id": "claude-3-5-sonnet-20241022",
+      "detectable": true,
+      "pattern": "ChatAnthropic(model=\"claude-3-5-sonnet-20241022\")",
+      "detectable_scope": "python_literal"
+    },
+    {
+      "id": "llama3.2",
+      "detectable": true,
+      "pattern": "Ollama(model=\"llama3.2\")",
+      "detectable_scope": "python_literal"
+    }
+  ]
+}

@@ -7,17 +7,20 @@
     {
       "id": "facebook/bart-large-cnn",
       "detectable": true,
-      "pattern": "pipeline(model=)"
+      "pattern": "pipeline(model=)",
+      "detectable_scope": "python_literal"
     },
     {
       "id": "openai/whisper-base",
       "detectable": true,
-      "pattern": "AutoFeatureExtractor.from_pretrained"
+      "pattern": "AutoFeatureExtractor.from_pretrained",
+      "detectable_scope": "python_literal"
     },
     {
       "id": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
       "detectable": true,
-      "pattern": "AutoModelForSequenceClassification.from_pretrained"
+      "pattern": "AutoModelForSequenceClassification.from_pretrained",
+      "detectable_scope": "python_variable"
     }
   ],
   "_notes": ""

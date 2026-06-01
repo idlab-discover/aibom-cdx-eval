@@ -7,22 +7,26 @@
     {
       "id": "mistralai/Mistral-7B-Instruct-v0.2",
       "detectable": true,
-      "pattern": "docker-compose.yml LLM_MODEL"
+      "pattern": "docker-compose.yml LLM_MODEL",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "sentence-transformers/all-MiniLM-L12-v2",
       "detectable": true,
-      "pattern": "docker-compose.yml EMBED_MODEL"
+      "pattern": "docker-compose.yml EMBED_MODEL",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "facebook/bart-large-mnli",
       "detectable": true,
-      "pattern": "docker-compose.yml CLASSIFIER_MODEL"
+      "pattern": "docker-compose.yml CLASSIFIER_MODEL",
+      "detectable_scope": "yaml_literal"
     },
     {
       "id": "philschmid/bart-large-cnn-samsum",
       "detectable": true,
-      "pattern": "docker-compose.yml SUMMARIZER_MODEL"
+      "pattern": "docker-compose.yml SUMMARIZER_MODEL",
+      "detectable_scope": "yaml_literal"
     }
   ],
   "_notes": ""

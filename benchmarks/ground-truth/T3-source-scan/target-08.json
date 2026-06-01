@@ -7,17 +7,20 @@
     {
       "id": "Xenova/bert-base-NER",
       "detectable": true,
-      "pattern": "TypeScript const MODEL_ID"
+      "pattern": "TypeScript const MODEL_ID",
+      "detectable_scope": "js_literal"
     },
     {
       "id": "Xenova/distilbert-base-uncased-finetuned-sst-2-english",
       "detectable": true,
-      "pattern": "TypeScript const SENTIMENT_MODEL"
+      "pattern": "TypeScript const SENTIMENT_MODEL",
+      "detectable_scope": "js_literal"
     },
     {
       "id": "Xenova/all-MiniLM-L6-v2",
       "detectable": true,
-      "pattern": "JavaScript pipeline call"
+      "pattern": "JavaScript pipeline call",
+      "detectable_scope": "js_literal"
     }
   ],
   "_notes": ""

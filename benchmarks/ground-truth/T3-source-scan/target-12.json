@@ -7,12 +7,14 @@
     {
       "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
       "detectable": true,
-      "pattern": "FastAPI CHAT_MODEL const"
+      "pattern": "FastAPI CHAT_MODEL const",
+      "detectable_scope": "python_variable"
     },
     {
       "id": "dslim/bert-base-NER",
       "detectable": true,
-      "pattern": "FastAPI pipeline(model=)"
+      "pattern": "FastAPI pipeline(model=)",
+      "detectable_scope": "python_literal"
     }
   ],
   "_notes": ""

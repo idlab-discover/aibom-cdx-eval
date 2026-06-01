@@ -1,0 +1,5 @@
+models:
+  # Default model for lightweight tasks
+  default: gpt-4o-mini
+  # Embedding model for vector search
+  embedding: text-embedding-3-small

@@ -24,12 +24,15 @@ def score_discovery(
     """
     Compute precision, recall, and F1 for source code scanning.
 
-    Args:
-        detected_ids:      Model IDs extracted from the tool output.
-        ground_truth_path: Path to a ground-truth JSON with a "models" array.
+    Returns two sets of metrics:
+    - Full metrics (all detectable=True models in ground truth).
+    - "python_literal" scoped metrics (only models whose detectable_scope ==
+      "python_literal"), representing the common-denominator case where all
+      scanners can reasonably compete.
 
-    Returns:
-        {"precision": float, "recall": float, "f1": float, "tp": int, "fp": int, "fn": int}
+    FP is always computed against the full ground truth: a model that exists in
+    any scope is never a false positive, even if it falls outside the scope
+    being measured.
     """
     try:
         with open(ground_truth_path) as f:
@@ -37,35 +40,82 @@ def score_discovery(
     except Exception:
         return _empty_scores()
 
-    # Build ground-truth sets (only detectable=True entries count)
     gt_models: list[dict] = gt_data.get("models", [])
-    gt_ids_exact: set[str] = {
-        m["id"] for m in gt_models if m.get("detectable", True)
+
+    # Full ground truth (all detectable=True)
+    full_scores = _compute_scores(
+        detected_ids,
+        gt_all={m["id"] for m in gt_models if m.get("detectable", True)},
+        gt_subset={m["id"] for m in gt_models if m.get("detectable", True)},
+    )
+
+    # Python-literal-only subset ground truth
+    py_scores = _compute_scores(
+        detected_ids,
+        gt_all={m["id"] for m in gt_models if m.get("detectable", True)},
+        gt_subset={
+            m["id"] for m in gt_models
+            if m.get("detectable", True)
+            and m.get("detectable_scope") == "python_literal"
+        },
+    )
+
+    return {
+        "precision":    full_scores["precision"],
+        "recall":       full_scores["recall"],
+        "f1":           full_scores["f1"],
+        "tp":           full_scores["tp"],
+        "fp":           full_scores["fp"],
+        "fn":           full_scores["fn"],
+        "precision_py": py_scores["precision"],
+        "recall_py":    py_scores["recall"],
+        "f1_py":        py_scores["f1"],
+        "tp_py":        py_scores["tp"],
+        "fp_py":        py_scores["fp"],
+        "fn_py":        py_scores["fn"],
     }
-    gt_ids_lower: set[str] = {_normalize_model_id(m) for m in gt_ids_exact}
+
+
+def _compute_scores(
+    detected_ids: list[str],
+    gt_all: set[str],
+    gt_subset: set[str],
+) -> dict[str, Any]:
+    """Core TP/FP/FN computation.
+
+    TP is counted against gt_subset (the scope being measured).
+    FP is counted against gt_all (any correctly detected model is never a FP).
+    FN is the gap between gt_subset and what was detected.
+    """
+    gt_subset_lower: set[str] = {_normalize_model_id(m) for m in gt_subset}
+    gt_all_lower: set[str] = {_normalize_model_id(m) for m in gt_all}
 
     detected_set: set[str] = set(detected_ids)
     detected_lower: set[str] = {_normalize_model_id(d) for d in detected_ids}
 
-    # True positives: exact match or fuzzy match
-    tp_exact = detected_set & gt_ids_exact
-    # Fuzzy: detected model-name matches a GT model-name (handles org-prefix differences)
-    tp_fuzzy_lower = (detected_lower - {_normalize_model_id(d) for d in tp_exact}) & gt_ids_lower
-
+    # True positives against the measured subset
+    tp_exact = detected_set & gt_subset
+    tp_fuzzy_lower = (
+        (detected_lower - {_normalize_model_id(d) for d in tp_exact}) & gt_subset_lower
+    )
     tp = len(tp_exact) + len(tp_fuzzy_lower)
-    fp = len(detected_ids) - tp
-    fn = len(gt_ids_exact) - tp
 
-    # Clamp negatives (can arise from dedup / fuzzy overlap)
-    fp = max(fp, 0)
-    fn = max(fn, 0)
+    # False positives: detected but not in the FULL ground truth (any scope)
+    matched_in_all_exact = detected_set & gt_all
+    matched_in_all_fuzzy = (
+        (detected_lower - {_normalize_model_id(d) for d in matched_in_all_exact})
+        & gt_all_lower
+    )
+    correctly_detected = len(matched_in_all_exact) + len(matched_in_all_fuzzy)
+    fp = max(len(detected_ids) - correctly_detected, 0)
+
+    fn = max(len(gt_subset) - tp, 0)
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1        = (
         2 * precision * recall / (precision + recall)
-        if (precision + recall) > 0
-        else 0.0
+        if (precision + recall) > 0 else 0.0
     )
 
     return {
@@ -79,11 +129,8 @@ def score_discovery(
 
 
 def _empty_scores() -> dict[str, Any]:
-    return {
-        "precision": None,
-        "recall":    None,
-        "f1":        None,
-        "tp":        None,
-        "fp":        None,
-        "fn":        None,
-    }
+    empty: dict[str, Any] = {}
+    for suffix in ("", "_py"):
+        for k in ("precision", "recall", "f1", "tp", "fp", "fn"):
+            empty[k + suffix] = None
+    return empty

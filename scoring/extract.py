@@ -39,6 +39,8 @@ def extract_model_ids_cyclonedx(output_path: Path) -> list[str]:
     Sources checked (in order):
       1. bom.metadata.component.name
       2. bom.components[*].name  (filtered to HF-style IDs)
+      3. bom.components[*].properties[name=="trusera:model_name"].value
+         (trusera --deep emits actual model IDs here, not in component.name)
     """
     try:
         with open(output_path) as f:
@@ -50,6 +52,11 @@ def extract_model_ids_cyclonedx(output_path: Path) -> list[str]:
     _collect_cdx_name(bom.get("metadata", {}).get("component", {}), ids)
     for comp in bom.get("components", []):
         _collect_cdx_name(comp, ids)
+        for prop in comp.get("properties", []):
+            if prop.get("name") == "trusera:model_name":
+                val = prop.get("value", "").strip()
+                if val:
+                    ids.append(val)
 
     return _deduplicate(ids)
 

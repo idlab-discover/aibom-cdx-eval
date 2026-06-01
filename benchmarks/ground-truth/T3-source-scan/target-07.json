@@ -7,12 +7,14 @@
     {
       "id": "meta-llama/Llama-2-7b-chat-hf",
       "detectable": true,
-      "pattern": "Dockerfile ARG MODEL_ID default"
+      "pattern": "Dockerfile ARG MODEL_ID default",
+      "detectable_scope": "dockerfile_literal"
     },
     {
       "id": "sentence-transformers/all-mpnet-base-v2",
       "detectable": true,
-      "pattern": "Dockerfile ENV EMBEDDING_MODEL"
+      "pattern": "Dockerfile ENV EMBEDDING_MODEL",
+      "detectable_scope": "dockerfile_literal"
     }
   ],
   "_notes": ""
