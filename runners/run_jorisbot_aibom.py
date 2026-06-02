@@ -9,9 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from runners.base_runner import BaseRunner, EVAL_ROOT
+from constants import EVAL_ROOT
+from runners.base_runner import BaseRunner
 from scoring.extract import extract_model_ids_jorisbot
 from scoring.score_discovery import score_discovery
+from scoring.utils import resolve_ground_truth_path
 
 
 class JorisbotAibomRunner(BaseRunner):
@@ -38,9 +40,7 @@ class JorisbotAibomRunner(BaseRunner):
             return {}
 
         gt_str = self.task_config.get("current_dataset_ground_truth", "")
-        ground_truth_path = Path(gt_str) if gt_str else None
-        if ground_truth_path and not ground_truth_path.is_absolute():
-            ground_truth_path = EVAL_ROOT / ground_truth_path
+        ground_truth_path = resolve_ground_truth_path(gt_str or None, EVAL_ROOT)
 
         detected = extract_model_ids_jorisbot(output_path)
         scores: dict[str, Any] = {"detected_ids": detected}

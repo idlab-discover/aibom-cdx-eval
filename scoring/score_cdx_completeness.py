@@ -25,8 +25,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-EVAL_ROOT = Path(__file__).parent.parent
-SCHEMA_DIR = EVAL_ROOT / "schemas"
+from constants import (
+    EVAL_ROOT,
+    K_CDX_COMPLETENESS_DETAIL_V16,
+    K_CDX_COMPLETENESS_DETAIL_V17,
+    K_CDX_COMPLETENESS_V16,
+    K_CDX_COMPLETENESS_V17,
+    SCHEMA_DIR,
+)
 
 _SCHEMA_PATHS = {
     "v16": SCHEMA_DIR / "cyclonedx-1.6.schema.json",
@@ -203,10 +209,10 @@ def score_cdx_completeness(output_path: Path) -> dict[str, Any]:
         }
     """
     null_result: dict[str, Any] = {
-        "cdx_completeness_pct_v16": None,
-        "cdx_completeness_pct_v17": None,
-        "cdx_completeness_detail_v16": None,
-        "cdx_completeness_detail_v17": None,
+        K_CDX_COMPLETENESS_V16:        None,
+        K_CDX_COMPLETENESS_V17:        None,
+        K_CDX_COMPLETENESS_DETAIL_V16: None,
+        K_CDX_COMPLETENESS_DETAIL_V17: None,
     }
 
     if output_path is None or not output_path.exists():
@@ -220,8 +226,8 @@ def score_cdx_completeness(output_path: Path) -> dict[str, Any]:
     result: dict[str, Any] = {}
 
     for version_key, pct_key, detail_key in [
-        ("v16", "cdx_completeness_pct_v16", "cdx_completeness_detail_v16"),
-        ("v17", "cdx_completeness_pct_v17", "cdx_completeness_detail_v17"),
+        ("v16", K_CDX_COMPLETENESS_V16, K_CDX_COMPLETENESS_DETAIL_V16),
+        ("v17", K_CDX_COMPLETENESS_V17, K_CDX_COMPLETENESS_DETAIL_V17),
     ]:
         paths = _get_schema_paths(version_key)
         if not paths:

@@ -26,17 +26,52 @@ from typing import Any
 
 import click
 
-EVAL_ROOT = Path(__file__).parent.parent
-DEFAULT_RESULTS_DIR = EVAL_ROOT / "results" / "runs"
-AGGREGATED_DIR = EVAL_ROOT / "results" / "aggregated"
+from constants import (
+    AGGREGATED_DIR,
+    EC_CRASH,
+    EC_SUCCESS,
+    EVAL_ROOT,
+    GT_DIR,
+    K_CDX_BREADTH_V16,
+    K_CDX_BREADTH_V17,
+    K_CDX_COMPLETENESS_DETAIL_V16,
+    K_CDX_COMPLETENESS_DETAIL_V17,
+    K_CDX_COMPLETENESS_V16,
+    K_CDX_COMPLETENESS_V17,
+    K_CDX_CONFORMANCE_PASS_V16,
+    K_CDX_CONFORMANCE_PASS_V17,
+    K_CDX_CONFORMANCE_VALID_V16,
+    K_CDX_CONFORMANCE_VALID_V17,
+    K_DETECTED_IDS,
+    K_ERROR_CLASS,
+    K_F1,
+    K_FAILURE_RATE,
+    K_FIELDS_PRESENT,
+    K_NORMALIZED_THROUGHPUT,
+    K_OUTPUT_SIZE_BYTES,
+    K_PRECISION,
+    K_RECALL,
+    K_RETRIES_MEAN,
+    K_SIZE_NORM_THROUGHPUT,
+    K_SUCCESS_RATE,
+    RESULTS_DIR,
+    SUBTASK_T1,
+    SUBTASK_T2,
+    SUBTASK_T3,
+    SUBTASK_T4G1,
+    SUBTASK_T4G2,
+    TASK_T1_T2,
+    TASK_T3_T4G2,
+)
+from scoring.utils import pass_rate
 
 # Primary metric for rankings per sub-task
 PRIMARY_METRICS: dict[str, str] = {
-    "T1":    "normalized_throughput",
-    "T2":    "success_rate",
-    "T3":    "f1",
-    "T4-G1": "cdx_completeness_pct_v16",
-    "T4-G2": "cdx_completeness_pct_v16",
+    SUBTASK_T1:   K_NORMALIZED_THROUGHPUT,
+    SUBTASK_T2:   K_SUCCESS_RATE,
+    SUBTASK_T3:   K_F1,
+    SUBTASK_T4G1: K_CDX_BREADTH_V16,
+    SUBTASK_T4G2: K_CDX_BREADTH_V16,
 }
 
 
@@ -44,7 +79,7 @@ PRIMARY_METRICS: dict[str, str] = {
 @click.option("--run-id", required=True, help="Run ID to aggregate.")
 @click.option(
     "--results-dir",
-    default=str(DEFAULT_RESULTS_DIR),
+    default=str(RESULTS_DIR),
     show_default=True,
     help="Base results directory.",
 )
@@ -100,20 +135,22 @@ def _build_summary(records: list[dict]) -> dict[str, Any]:
       T4-G1   — CDX quality for CDX-capable T1_T2 tools
       T4-G2   — CDX quality for CDX-capable T3_T4G2 tools
     """
-    t1t2_records   = [r for r in records if r.get("task") == "T1_T2"]
-    t3t4g2_records = [r for r in records if r.get("task") == "T3_T4G2"]
+    t1t2_records   = [r for r in records if r.get("task") == TASK_T1_T2]
+    t3t4g2_records = [r for r in records if r.get("task") == TASK_T3_T4G2]
 
     summary: dict[str, Any] = {}
 
     _aggregate_section(
-        summary, "T1", t1t2_records,
-        metric_keys=["normalized_throughput", "size_normalized_throughput",
-                     "fields_present", "output_size_bytes"],
+        summary, SUBTASK_T1, t1t2_records,
+        metric_keys=[
+            K_NORMALIZED_THROUGHPUT, K_SIZE_NORM_THROUGHPUT,
+            K_FIELDS_PRESENT, K_OUTPUT_SIZE_BYTES,
+        ],
     )
-    _aggregate_reliability(summary, "T2", t1t2_records)
-    _aggregate_discovery(summary, "T3", t3t4g2_records)
-    _aggregate_cdx(summary, "T4-G1", [r for r in t1t2_records if _has_cdx(r)])
-    _aggregate_cdx(summary, "T4-G2", [r for r in t3t4g2_records if _has_cdx(r)])
+    _aggregate_reliability(summary, SUBTASK_T2, t1t2_records)
+    _aggregate_discovery(summary, SUBTASK_T3, t3t4g2_records)
+    _aggregate_cdx(summary, SUBTASK_T4G1, [r for r in t1t2_records if _has_cdx(r)])
+    _aggregate_cdx(summary, SUBTASK_T4G2, [r for r in t3t4g2_records if _has_cdx(r)])
 
     return summary
 
@@ -141,7 +178,7 @@ def _aggregate_section(
             "sub_task":     sub_task,
             "total_runs":   len(recs),
             "successful":   len(successes),
-            "success_rate": round(len(successes) / max(len(recs), 1), 4),
+            K_SUCCESS_RATE: round(len(successes) / max(len(recs), 1), 4),
             "metrics": {
                 **{m: _agg_metric(scores, m) for m in metric_keys},
                 "duration_seconds": {
@@ -174,7 +211,7 @@ def _aggregate_discovery(
         successes = [r for r in recs if r.get("success")]
 
         # ── Full metrics (all detectable models) ──────────────────────────────
-        float_metrics = {m: _agg_metric(scores, m) for m in ["precision", "recall", "f1"]}
+        float_metrics = {m: _agg_metric(scores, m) for m in [K_PRECISION, K_RECALL, K_F1]}
         tp_total  = sum(s.get("tp") or 0 for s in scores)
         fp_total  = sum(s.get("fp") or 0 for s in scores)
         fn_total  = sum(s.get("fn") or 0 for s in scores)
@@ -200,7 +237,7 @@ def _aggregate_discovery(
             "sub_task":     sub_task,
             "total_runs":   len(recs),
             "successful":   len(successes),
-            "success_rate": round(len(successes) / max(len(recs), 1), 4),
+            K_SUCCESS_RATE: round(len(successes) / max(len(recs), 1), 4),
             "metrics": {
                 **float_metrics,
                 "tp_total":           tp_total,
@@ -216,7 +253,7 @@ def _aggregate_discovery(
         }
 
 
-_GT_DIR = EVAL_ROOT / "benchmarks" / "ground-truth" / "T3-source-scan"
+_GT_DIR = GT_DIR  # backward-compatible alias; use GT_DIR from constants directly
 
 
 def _normalize(model_id: str) -> str:
@@ -233,7 +270,7 @@ def _compute_py_scores(record: dict) -> dict:
     as a false positive in the scoped score.
     """
     dataset = record.get("dataset", "")
-    gt_path = _GT_DIR / f"{dataset}.json"
+    gt_path = GT_DIR / f"{dataset}.json"
     if not gt_path.exists():
         return {}
 
@@ -245,7 +282,7 @@ def _compute_py_scores(record: dict) -> dict:
     gt_py_norm   = {_normalize(m["id"]) for m in models
                     if m.get("detectable") and m.get("detectable_scope") == "python_literal"}
 
-    detected_raw: list[str] = record.get("scores", {}).get("detected_ids") or []
+    detected_raw: list[str] = record.get("scores", {}).get(K_DETECTED_IDS) or []
     detected_norm = {_normalize(d) for d in detected_raw}
 
     tp_py = len(detected_norm & gt_py_norm)
@@ -285,8 +322,8 @@ def _aggregate_reliability(
 
         error_counts: dict[str, int] = defaultdict(int)
         for r in recs:
-            ec = r.get("scores", {}).get("error_class") or (
-                "success" if r.get("success") else "crash"
+            ec = r.get("scores", {}).get(K_ERROR_CLASS) or (
+                EC_SUCCESS if r.get("success") else EC_CRASH
             )
             error_counts[ec] += 1
 
@@ -295,10 +332,10 @@ def _aggregate_reliability(
             "sub_task":        sub_task,
             "total_runs":      total,
             "successful":      successes,
-            "success_rate":    success_rate,
-            "failure_rate":    round(1 - success_rate, 4),
+            K_SUCCESS_RATE:    success_rate,
+            K_FAILURE_RATE:    round(1 - success_rate, 4),
             "error_breakdown": dict(error_counts),
-            "retries_mean":    _mean([r.get("retries", 0) for r in recs]),
+            K_RETRIES_MEAN:    _mean([r.get("retries", 0) for r in recs]),
         }
 
 
@@ -337,25 +374,32 @@ def _merge_completeness_detail(detail: dict[str, bool]) -> dict[str, bool]:
     return merged
 
 
-def _agg_completeness(
+def _agg_cdx_coverage(
     scores: list[dict],
     detail_key: str,
-    fallback_pct_key: str,
+    pct_key: str,
 ) -> dict | None:
-    """Aggregate completeness as field-breadth: fraction of schema paths the tool
-    fills in at least one run (after component-location merging).
+    """Single-pass computation of both breadth and completeness from per-run data.
 
-    Per-run mean is stored separately but breadth is the primary (.mean) value
-    because it captures tool *capability* — how many distinct CycloneDX fields
-    the tool actually implements — rather than template consistency per BOM.
+    breadth     = |union of schema paths filled in ≥1 run| / |total paths|
+                  after merging metadata.component.X and components[].X
+    completeness = mean of the pre-computed per-run pct values (from metrics.json)
+                  Uses the same denominator as the individual run scorer, so
+                  the summary value is directly comparable to per-run metrics.
 
-    Falls back to per-run mean of the raw stored pct for tools without stored
-    detail (e.g. v17 completeness).
+    Falls back to mean of per-run pcts when detail is absent (e.g. v17 fallback).
+
+    Returns a dict with keys:
+        breadth_pct           float   (primary ranking metric)
+        completeness_pct      float | None
+        distinct_paths_filled int     (only when detail available)
+        total_paths           int     (only when detail available)
+        n                     int
     """
     union_true: set[str] = set()
     total_paths: int | None = None
-    per_run_pcts: list[float] = []
     n_with_detail = 0
+    per_run_pcts: list[float] = []
 
     for s in scores:
         detail = s.get(detail_key)
@@ -363,36 +407,57 @@ def _agg_completeness(
             merged = _merge_completeness_detail(detail)
             if total_paths is None:
                 total_paths = len(merged)
-            present = sum(1 for v in merged.values() if v)
-            per_run_pcts.append(round(present / total_paths * 100, 4) if total_paths else 0.0)
             union_true.update(p for p, v in merged.items() if v)
             n_with_detail += 1
-        else:
-            raw = s.get(fallback_pct_key)
-            if isinstance(raw, (int, float)):
-                per_run_pcts.append(float(raw))
+        # Always use the pre-computed pct for the mean — consistent with per-run
+        # metrics.json values and avoids the merged-path denominator mismatch.
+        raw = s.get(pct_key)
+        if isinstance(raw, (int, float)):
+            per_run_pcts.append(float(raw))
 
-    if not per_run_pcts:
+    if not per_run_pcts and n_with_detail == 0:
         return None
 
+    completeness_pct = round(_mean(per_run_pcts), 4) if per_run_pcts else None
+
     if total_paths and n_with_detail > 0:
-        breadth = round(len(union_true) / total_paths * 100, 4)
-        mean_per_run = round(_mean(per_run_pcts), 4)
+        breadth_pct = round(len(union_true) / total_paths * 100, 4)
         return {
-            # breadth = distinct merged paths filled in ≥1 run / total merged paths.
-            # Exposed as "mean" so downstream report/ranking code reads it transparently.
-            "mean":         breadth,
-            "mean_per_run": mean_per_run,
+            "breadth_pct":           breadth_pct,
+            "completeness_pct":      completeness_pct,
             "distinct_paths_filled": len(union_true),
-            "total_paths":  total_paths,
-            "n":            n_with_detail,
+            "total_paths":           total_paths,
+            "n":                     n_with_detail,
         }
 
-    # Fallback: no detail available, use per-run mean as-is.
+    # Fallback: no detail — breadth equals completeness (no union available)
     return {
-        "mean": round(_mean(per_run_pcts), 4),
-        "n":    len(per_run_pcts),
+        "breadth_pct":      completeness_pct,
+        "completeness_pct": completeness_pct,
+        "n":                len(per_run_pcts),
     }
+
+
+def _coverage_to_summary_metrics(
+    cov: dict | None,
+) -> tuple[dict | None, dict | None]:
+    """Split a coverage result into separate (completeness, breadth) summary dicts.
+
+    Both use ``{"mean": ..., "n": ...}`` shape expected by _metric_table and rankings.
+    Breadth also carries the path-count breakdown for transparency.
+    """
+    if cov is None:
+        return None, None
+    n = cov.get("n")
+    completeness = (
+        {"mean": cov["completeness_pct"], "n": n}
+        if cov.get("completeness_pct") is not None else None
+    )
+    breadth: dict = {"mean": cov["breadth_pct"], "n": n}
+    if "distinct_paths_filled" in cov:
+        breadth["distinct_paths_filled"] = cov["distinct_paths_filled"]
+        breadth["total_paths"] = cov["total_paths"]
+    return completeness, breadth
 
 
 def _aggregate_cdx(
@@ -406,30 +471,33 @@ def _aggregate_cdx(
         key = f"{tool}::{sub_task}"
         scores = [r.get("scores", {}) for r in recs]
 
-        v16_valid = [s["cdx_conformance_valid_v16"] for s in scores
-                     if s.get("cdx_conformance_valid_v16") is not None]
-        v17_valid = [s["cdx_conformance_valid_v17"] for s in scores
-                     if s.get("cdx_conformance_valid_v17") is not None]
+        v16_valid = [s[K_CDX_CONFORMANCE_VALID_V16] for s in scores
+                     if s.get(K_CDX_CONFORMANCE_VALID_V16) is not None]
+        v17_valid = [s[K_CDX_CONFORMANCE_VALID_V17] for s in scores
+                     if s.get(K_CDX_CONFORMANCE_VALID_V17) is not None]
+
+        _cov16 = _agg_cdx_coverage(scores, K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_COMPLETENESS_V16)
+        _cov17 = _agg_cdx_coverage(scores, K_CDX_COMPLETENESS_DETAIL_V17, K_CDX_COMPLETENESS_V17)
+        c16, b16 = _coverage_to_summary_metrics(_cov16)
+        c17, b17 = _coverage_to_summary_metrics(_cov17)
 
         summary[key] = {
             "tool":     tool,
             "sub_task": sub_task,
             "total_runs": len(recs),
             "metrics": {
-                "cdx_completeness_pct_v16":      _agg_completeness(scores, "cdx_completeness_detail_v16", "cdx_completeness_pct_v16"),
-                "cdx_completeness_pct_v17":      _agg_completeness(scores, "cdx_completeness_detail_v17", "cdx_completeness_pct_v17"),
-                "cdx_conformance_pass_rate_v16": round(
-                    sum(bool(v) for v in v16_valid) / max(len(v16_valid), 1), 4
-                ) if v16_valid else None,
-                "cdx_conformance_pass_rate_v17": round(
-                    sum(bool(v) for v in v17_valid) / max(len(v17_valid), 1), 4
-                ) if v17_valid else None,
+                K_CDX_COMPLETENESS_V16:    c16,
+                K_CDX_BREADTH_V16:         b16,
+                K_CDX_COMPLETENESS_V17:    c17,
+                K_CDX_BREADTH_V17:         b17,
+                K_CDX_CONFORMANCE_PASS_V16: pass_rate(v16_valid),
+                K_CDX_CONFORMANCE_PASS_V17: pass_rate(v17_valid),
             },
         }
 
 
 def _has_cdx(record: dict) -> bool:
-    return record.get("scores", {}).get("cdx_conformance_valid_v16") is not None
+    return record.get("scores", {}).get(K_CDX_CONFORMANCE_VALID_V16) is not None
 
 
 # ------------------------------------------------------------------ #
@@ -449,7 +517,7 @@ def _build_rankings(summary: dict) -> list[dict[str, Any]]:
 
         scored = []
         for e in entries:
-            if primary_key in ("success_rate", "failure_rate"):
+            if primary_key in (K_SUCCESS_RATE, K_FAILURE_RATE):
                 raw = e.get(primary_key)
             else:
                 agg = e.get("metrics", {}).get(primary_key)

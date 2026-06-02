@@ -11,6 +11,8 @@ import datetime
 import json
 from pathlib import Path
 
+from constants import CHECKPOINT_DELIMITER
+
 
 class Checkpoint:
     def __init__(self, path: Path) -> None:
@@ -34,7 +36,7 @@ class Checkpoint:
     @staticmethod
     def _key(tool: str, task: str, dataset: str, input_spec: str) -> str:
         # Use a compact delimiter that won't appear in typical IDs
-        return f"{tool}|{task}|{dataset}|{input_spec}"
+        return CHECKPOINT_DELIMITER.join([tool, task, dataset, input_spec])
 
     def is_done(self, tool: str, task: str, dataset: str, input_spec: str) -> bool:
         key = self._key(tool, task, dataset, input_spec)

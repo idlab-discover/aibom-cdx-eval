@@ -100,3 +100,24 @@ def extract_model_ids_jorisbot(output_path: Path) -> list[str]:
             ids.append(name)
 
     return _deduplicate(ids)
+
+
+# ------------------------------------------------------------------ #
+# akumar-aibom  (native JSON: {models:[{model, version, ...}]})
+# ------------------------------------------------------------------ #
+
+def extract_model_ids_akumar(output_path: Path) -> list[str]:
+    """Extract model IDs from akumar's native AIBOM JSON format.
+
+    Reads ``models[].model`` and skips placeholder values ("unknown", "").
+    """
+    try:
+        data = json.loads(output_path.read_text())
+    except Exception:
+        return []
+    ids = []
+    for m in data.get("models", []):
+        model_id = m.get("model", "")
+        if model_id and model_id.lower() != "unknown":
+            ids.append(model_id)
+    return _deduplicate(ids)

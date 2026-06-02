@@ -10,32 +10,17 @@ cleanup_side_effects: removes any AI_BOM.json, AIBOM.json etc. left in tool work
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from runners.base_runner import BaseRunner, EVAL_ROOT
+from constants import EVAL_ROOT
+from runners.base_runner import BaseRunner
+from scoring.extract import extract_model_ids_akumar
 from scoring.score_cdx_conformance import score_cdx_conformance
 from scoring.score_cdx_completeness import score_cdx_completeness
 from scoring.score_discovery import score_discovery
-
-
-def _extract_model_ids_akumar(output_path: Path) -> list[str]:
-    """Extract model IDs from akumar's native AIBOM JSON format.
-
-    Reads ``models[].model`` and skips placeholder values ("unknown", "").
-    """
-    try:
-        data = json.loads(output_path.read_text())
-    except Exception:
-        return []
-    ids = []
-    for m in data.get("models", []):
-        model_id = m.get("model", "")
-        if model_id and model_id.lower() != "unknown":
-            ids.append(model_id)
-    return ids
+from scoring.utils import resolve_ground_truth_path
 
 
 def _export_cyclonedx(native_path: Path, entry: list[str], working_dir: Path) -> Path | None:
@@ -142,12 +127,10 @@ class AkumarAibomRunner(BaseRunner):
             return {}
 
         gt_str = self.task_config.get("current_dataset_ground_truth", "")
-        ground_truth_path = Path(gt_str) if gt_str else None
-        if ground_truth_path and not ground_truth_path.is_absolute():
-            ground_truth_path = EVAL_ROOT / ground_truth_path
+        ground_truth_path = resolve_ground_truth_path(gt_str or None, EVAL_ROOT)
 
         # T3 discovery: extract from akumar's native format (not CycloneDX)
-        detected = _extract_model_ids_akumar(output_path)
+        detected = extract_model_ids_akumar(output_path)
         scores: dict[str, Any] = {"detected_ids": detected}
 
         if ground_truth_path and ground_truth_path.exists():

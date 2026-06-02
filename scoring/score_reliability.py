@@ -22,6 +22,17 @@ import re
 from pathlib import Path
 from typing import Any
 
+from constants import (
+    EC_CRASH,
+    EC_MISSING_OUTPUT,
+    EC_NETWORK_ERROR,
+    EC_PARSE_ERROR,
+    EC_SUCCESS,
+    EC_TIMEOUT,
+    EC_UNAUTHORIZED_DOWNLOAD,
+    K_ERROR_CLASS,
+)
+
 # ── regex patterns for stderr heuristics ──────────────────────────────────
 
 _NETWORK_PATTERNS = re.compile(
@@ -65,10 +76,10 @@ def classify_error(
         success:     Whether the runner marked this as a success.
     """
     if success:
-        return "success"
+        return EC_SUCCESS
 
     if exit_code == -9:
-        return "timeout"
+        return EC_TIMEOUT
 
     # parse_error: file present but unreadable / empty
     if output_path is not None and output_path.exists():
@@ -78,22 +89,22 @@ def classify_error(
                 return "parse_error"
             json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
-            return "parse_error"
+            return EC_PARSE_ERROR
 
     # network_error: heuristic on stderr
     if stderr and _NETWORK_PATTERNS.search(stderr):
-        return "network_error"
+        return EC_NETWORK_ERROR
 
     # unauthorized_download: 401 while fetching model weights from a gated repo
     combined = (stderr or "")
     if combined and _UNAUTHORIZED_401.search(combined) and _DOWNLOAD_URL.search(combined):
-        return "unauthorized_download"
+        return EC_UNAUTHORIZED_DOWNLOAD
 
     # missing_output: exit 0 but no artifact
     if exit_code == 0 and (output_path is None or not output_path.exists()):
-        return "missing_output"
+        return EC_MISSING_OUTPUT
 
-    return "crash"
+    return EC_CRASH
 
 
 # ── public scorer (called once per run) ──────────────────────────────────
@@ -113,5 +124,5 @@ def score_reliability(
         }
     """
     return {
-        "error_class": classify_error(exit_code, stderr, output_path, success),
+        K_ERROR_CLASS: classify_error(exit_code, stderr, output_path, success),
     }

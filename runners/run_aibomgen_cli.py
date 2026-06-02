@@ -14,11 +14,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from runners.base_runner import BaseRunner, EVAL_ROOT
+from constants import EVAL_ROOT
+from runners.base_runner import BaseRunner
 from scoring.extract import extract_model_ids_cyclonedx
 from scoring.score_cdx_conformance import score_cdx_conformance
 from scoring.score_cdx_completeness import score_cdx_completeness
 from scoring.score_discovery import score_discovery
+from scoring.utils import resolve_ground_truth_path
 
 
 class AibomgenCliRunner(BaseRunner):
@@ -86,12 +88,9 @@ class AibomgenCliRunner(BaseRunner):
 
         if task_id == "T3_T4G2":
             # Discovery metrics against ground truth
-            ground_truth_path_str = self.task_config.get(
-                "current_dataset_ground_truth", ""
+            ground_truth_path = resolve_ground_truth_path(
+                self.task_config.get("current_dataset_ground_truth"), EVAL_ROOT
             )
-            ground_truth_path = Path(ground_truth_path_str) if ground_truth_path_str else None
-            if ground_truth_path and not ground_truth_path.is_absolute():
-                ground_truth_path = EVAL_ROOT / ground_truth_path
 
             if ground_truth_path and ground_truth_path.exists():
                 detected: list[str] = []

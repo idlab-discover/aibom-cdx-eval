@@ -17,8 +17,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-EVAL_ROOT = Path(__file__).parent.parent
-SCHEMA_DIR = EVAL_ROOT / "schemas"
+from constants import (
+    EVAL_ROOT,
+    K_CDX_CONFORMANCE_ERRORS_V16,
+    K_CDX_CONFORMANCE_ERRORS_V17,
+    K_CDX_CONFORMANCE_VALID_V16,
+    K_CDX_CONFORMANCE_VALID_V17,
+    SCHEMA_DIR,
+)
 
 _SCHEMAS = {
     "v16": {
@@ -98,10 +104,10 @@ def score_cdx_conformance(output_path: Path) -> dict[str, Any]:
         }
     """
     null_result = {
-        "cdx_conformance_valid_v16": None,
-        "cdx_conformance_errors_v16": None,
-        "cdx_conformance_valid_v17": None,
-        "cdx_conformance_errors_v17": None,
+        K_CDX_CONFORMANCE_VALID_V16:  None,
+        K_CDX_CONFORMANCE_ERRORS_V16: None,
+        K_CDX_CONFORMANCE_VALID_V17:  None,
+        K_CDX_CONFORMANCE_ERRORS_V17: None,
     }
 
     if output_path is None or not output_path.exists():
@@ -113,14 +119,17 @@ def score_cdx_conformance(output_path: Path) -> dict[str, Any]:
         return null_result
 
     result: dict[str, Any] = {}
-    for key, suffix in [("v16", "v16"), ("v17", "v17")]:
+    for key, valid_k, errors_k in [
+        ("v16", K_CDX_CONFORMANCE_VALID_V16, K_CDX_CONFORMANCE_ERRORS_V16),
+        ("v17", K_CDX_CONFORMANCE_VALID_V17, K_CDX_CONFORMANCE_ERRORS_V17),
+    ]:
         schema = _load_schema(key)
         if schema is None:
-            result[f"cdx_conformance_valid_{suffix}"] = None
-            result[f"cdx_conformance_errors_{suffix}"] = None
+            result[valid_k]  = None
+            result[errors_k] = None
             continue
         errors = _validate(instance, schema)
-        result[f"cdx_conformance_valid_{suffix}"] = len(errors) == 0
-        result[f"cdx_conformance_errors_{suffix}"] = errors if errors else []
+        result[valid_k]  = len(errors) == 0
+        result[errors_k] = errors if errors else []
 
     return result

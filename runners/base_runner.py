@@ -18,8 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Root of the eval repo — used for making raw_output_path relative
-EVAL_ROOT = Path(__file__).parent.parent
+from constants import DETERMINISM_ENV, EVAL_ROOT
 
 from scoring.score_performance import score_performance   # noqa: E402
 from scoring.score_reliability import score_reliability   # noqa: E402
@@ -189,8 +188,8 @@ class BaseRunner(abc.ABC):
             run_env["HF_TOKEN"] = hf_token
             run_env["HUGGINGFACE_TOKEN"] = hf_token
             run_env["HF_HUB_TOKEN"] = hf_token
-        run_env["PYTHONHASHSEED"] = "42"
-        run_env.setdefault("TRANSFORMERS_SEED", "42")
+        run_env["PYTHONHASHSEED"] = DETERMINISM_ENV["PYTHONHASHSEED"]
+        run_env.setdefault("TRANSFORMERS_SEED", DETERMINISM_ENV["TRANSFORMERS_SEED"])
 
         self.pre_run()
         version, commit = self.get_version()
@@ -333,14 +332,6 @@ def _parse_gnu_time_memory(time_file: Path) -> float | None:
     except Exception:
         pass
     return None
-
-
-def _read_head(path: Path, n: int) -> str:
-    """Read first n characters of a file, silently returning '' on error."""
-    try:
-        return path.read_text(errors="replace")[:n]
-    except Exception:
-        return ""
 
 
 def _read_tail(path: Path, n: int) -> str:

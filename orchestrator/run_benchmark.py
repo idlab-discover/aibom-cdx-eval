@@ -5,33 +5,42 @@ Subcommands:
   run-local      Run all jobs on the current machine (parallel via --workers).
   status         Show completion status of a run.
   aggregate      Run the scoring aggregation pipeline for a completed run.
+  graphs         Generate publication-ready figures for a completed aggregated run.
 
 Quick start:
   uv run eval run-local --run-id my-run-001             # sequential
   uv run eval run-local --run-id my-run-001 --workers 4  # parallel
   uv run eval aggregate --run-id my-run-001
+  uv run eval graphs --run-id my-run-001
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import groupby
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 import yaml
 from rich.console import Console
 from rich.table import Table
 
-EVAL_ROOT = Path(__file__).parent.parent
-CONFIG_PATH = EVAL_ROOT / "orchestrator" / "config.yaml"
-DEFAULT_RESULTS_DIR = EVAL_ROOT / "results" / "runs"
+from constants import (
+    CHECKPOINT_FILENAME,
+    CONFIG_PATH,
+    EVAL_ROOT,
+    JOB_INDEX_FILENAME,
+    RESULTS_DIR,
+)
+from orchestrator.run_id import latest_run_id, next_run_id
+
+if TYPE_CHECKING:
+    from eval_types import JobSpec
 
 # ── load .env from repo root (if present) before anything else ──────────
 def _load_dotenv(path: Path) -> None:
@@ -60,6 +69,8 @@ _load_dotenv(EVAL_ROOT / ".env")
 
 console = Console()
 
+DEFAULT_RESULTS_DIR = RESULTS_DIR  # kept for backward-compat with --results-dir default display
+
 
 # ================================================================== #
 # CLI root                                                             #
@@ -70,13 +81,14 @@ def cli() -> None:
     """aibomgen-cli evaluation framework."""
 
 
+
 # ================================================================== #
 # run-local                                                            #
 # ================================================================== #
 
 @cli.command("run-local")
 @click.option("--run-id",    default=None, help="Run ID (auto-generated if not set).")
-@click.option("--results-dir", default=str(DEFAULT_RESULTS_DIR), show_default=True)
+@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
 @click.option("--tools",     default=None)
 @click.option("--tasks",     default=None)
 @click.option("--skip-done/--no-skip-done", default=True, show_default=True)
@@ -106,7 +118,7 @@ def run_local(
     from orchestrator.checkpoint import Checkpoint
 
     if run_id is None:
-        run_id = _next_run_id(Path(results_dir))
+        run_id = next_run_id(Path(results_dir))
         console.print(f"[dim]Auto run-id: {run_id}[/dim]")
 
     cfg = _load_config()
@@ -118,10 +130,10 @@ def run_local(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Write index and manifest
-    with open(run_dir / "job_index.json", "w") as f:
+    with open(run_dir / JOB_INDEX_FILENAME, "w") as f:
         json.dump(jobs, f, indent=2)
 
-    checkpoint = Checkpoint(run_dir / "checkpoint.json")
+    checkpoint = Checkpoint(run_dir / CHECKPOINT_FILENAME)
 
     pending = [
         job for job in jobs
@@ -205,23 +217,23 @@ def run_local(
 
 @cli.command("status")
 @click.option("--run-id", default=None, help="Run ID (defaults to latest run).")
-@click.option("--results-dir", default=str(DEFAULT_RESULTS_DIR), show_default=True)
+@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
 def status(run_id: str | None, results_dir: str) -> None:
     """Show completion status of a run."""
     from orchestrator.checkpoint import Checkpoint
 
     if run_id is None:
-        run_id = _latest_run_id(Path(results_dir))
+        run_id = latest_run_id(Path(results_dir))
         if run_id is None:
             click.echo("No runs found.", err=True)
             sys.exit(1)
         console.print(f"[dim]Using latest run: {run_id}[/dim]")
 
     run_dir = Path(results_dir) / run_id
-    checkpoint = Checkpoint(run_dir / "checkpoint.json")
+    checkpoint = Checkpoint(run_dir / CHECKPOINT_FILENAME)
     stats = checkpoint.stats()
 
-    index_path = run_dir / "job_index.json"
+    index_path = run_dir / JOB_INDEX_FILENAME
     total_jobs = "?"
     if index_path.exists():
         with open(index_path) as f:
@@ -243,11 +255,11 @@ def status(run_id: str | None, results_dir: str) -> None:
 
 @cli.command("aggregate")
 @click.option("--run-id", default=None, help="Run ID (defaults to latest run).")
-@click.option("--results-dir", default=str(DEFAULT_RESULTS_DIR), show_default=True)
+@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
 def aggregate(run_id: str | None, results_dir: str) -> None:
     """Run the scoring aggregation pipeline for a completed run."""
     if run_id is None:
-        run_id = _latest_run_id(Path(results_dir))
+        run_id = latest_run_id(Path(results_dir))
         if run_id is None:
             click.echo("No runs found.", err=True)
             sys.exit(1)
@@ -255,40 +267,37 @@ def aggregate(run_id: str | None, results_dir: str) -> None:
 
     from scoring.aggregate import main as agg_main
     from analysis.report import main as report_main
+    from analysis.graphs import main as graphs_main
 
     run_dir = Path(results_dir) / run_id
     agg_main(["--run-id", run_id, "--results-dir", results_dir], standalone_mode=False)
     report_main(["--run-id", run_id], standalone_mode=False)
+    graphs_main(["--run-id", run_id], standalone_mode=False)
 
 
 # ================================================================== #
-# Internal helpers / Run-ID helpers                                    #
+# graphs                                                               #
 # ================================================================== #
 
-_RUN_ID_RE = re.compile(r"^eval-(\d+)$")
+@cli.command("graphs")
+@click.option("--run-id", default=None, help="Run ID (defaults to latest run).")
+def graphs(run_id: str | None) -> None:
+    """Generate publication-ready figures for a completed aggregated run."""
+    if run_id is None:
+        run_id = latest_run_id(RESULTS_DIR)
+        if run_id is None:
+            click.echo("No runs found.", err=True)
+            sys.exit(1)
+        console.print(f"[dim]Using latest run: {run_id}[/dim]")
+
+    from analysis.graphs import main as graphs_main
+
+    graphs_main(["--run-id", run_id], standalone_mode=False)
 
 
-def _next_run_id(results_dir: Path) -> str:
-    """Return the next sequential eval-NNN run ID based on existing run directories."""
-    max_n = 0
-    if results_dir.exists():
-        for d in results_dir.iterdir():
-            m = _RUN_ID_RE.match(d.name)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-    return f"eval-{max_n + 1:03d}"
-
-
-def _latest_run_id(results_dir: Path) -> str | None:
-    """Return the most recently modified run directory name, or None."""
-    if not results_dir.exists():
-        return None
-    dirs = [d for d in results_dir.iterdir() if d.is_dir()]
-    if not dirs:
-        return None
-    return max(dirs, key=lambda d: d.stat().st_mtime).name
-
-
+# ================================================================== #
+# Internal helpers                                                      #
+# ================================================================== #
 def _load_config() -> dict:
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
