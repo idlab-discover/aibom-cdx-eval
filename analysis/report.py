@@ -113,13 +113,13 @@ def _build_report(run_id: str, summary: dict) -> list[str]:
 def _t1_table(entries: list[dict]) -> list[str]:
     lines: list[str] = [
         "$$",
-        r"\text{throughput} = \frac{\text{fields\_present}}{\text{duration\_s}} \qquad \text{size-norm} = \frac{\text{fields\_present}}{\text{output\_bytes}}",
+        r"\text{throughput} = \frac{\text{fields\_present}}{\text{duration\_s}} \qquad \text{size-norm throughput} = \frac{\text{fields\_present}}{\text{output\_bytes}}",
         "$$",
         "",
     ]
     cols = [
         (K_NORMALIZED_THROUGHPUT, "Throughput (fields/s)"),
-        (K_SIZE_NORM_THROUGHPUT,  "Size-norm throughput"),
+        (K_SIZE_NORM_THROUGHPUT,  "Size-norm throughput (fields/byte)"),
         (K_FIELDS_PRESENT,        "Fields present (mean)"),
         ("duration_seconds",      "Duration (s, mean)"),
     ]
