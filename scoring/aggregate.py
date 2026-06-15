@@ -3,7 +3,6 @@ aggregate.py — cross-tool, cross-task result aggregation.
 
 Reads all metrics.json files from a completed run and produces:
   results/aggregated/<run-id>_summary.json  — per-tool per-sub-task summary stats
-  results/aggregated/<run-id>_rankings.csv  — primary-metric rankings (within group)
 
 Sub-tasks derived from raw task IDs:
   T1_T2   → split into T1 (performance) and T2 (reliability) sub-sections
@@ -17,7 +16,6 @@ Usage:
 
 from __future__ import annotations
 
-import csv
 import json
 import sys
 from collections import defaultdict
@@ -65,15 +63,6 @@ from constants import (
 )
 from scoring.utils import pass_rate
 
-# Primary metric for rankings per sub-task
-PRIMARY_METRICS: dict[str, str] = {
-    SUBTASK_T1:   K_NORMALIZED_THROUGHPUT,
-    SUBTASK_T2:   K_SUCCESS_RATE,
-    SUBTASK_T3:   K_F1,
-    SUBTASK_T4G1: K_CDX_BREADTH_V16,
-    SUBTASK_T4G2: K_CDX_BREADTH_V16,
-}
-
 
 @click.command()
 @click.option("--run-id", required=True, help="Run ID to aggregate.")
@@ -93,18 +82,14 @@ def main(run_id: str, results_dir: str) -> None:
     click.echo(f"Loaded {len(records)} result records from run {run_id}")
 
     summary = _build_summary(records)
-    rankings = _build_rankings(summary)
 
     AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
     summary_path = AGGREGATED_DIR / f"{run_id}_summary.json"
-    rankings_path = AGGREGATED_DIR / f"{run_id}_rankings.csv"
 
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
-    _write_csv(rankings, rankings_path)
 
-    click.echo(f"Summary  → {summary_path}")
-    click.echo(f"Rankings → {rankings_path}")
+    click.echo(f"Summary → {summary_path}")
 
 
 # ------------------------------------------------------------------ #
@@ -443,7 +428,7 @@ def _coverage_to_summary_metrics(
 ) -> tuple[dict | None, dict | None]:
     """Split a coverage result into separate (completeness, breadth) summary dicts.
 
-    Both use ``{"mean": ..., "n": ...}`` shape expected by _metric_table and rankings.
+    Both use ``{"mean": ..., "n": ...}`` shape expected by report and graph generation.
     Breadth also carries the path-count breakdown for transparency.
     """
     if cov is None:
@@ -501,52 +486,6 @@ def _has_cdx(record: dict) -> bool:
 
 
 # ------------------------------------------------------------------ #
-# Rankings                                                             #
-# ------------------------------------------------------------------ #
-
-def _build_rankings(summary: dict) -> list[dict[str, Any]]:
-    by_subtask: dict[str, list[dict]] = defaultdict(list)
-    for entry in summary.values():
-        by_subtask[entry["sub_task"]].append(entry)
-
-    rows: list[dict] = []
-    for sub_task, entries in sorted(by_subtask.items()):
-        primary_key = PRIMARY_METRICS.get(sub_task)
-        if not primary_key:
-            continue
-
-        scored = []
-        for e in entries:
-            if primary_key in (K_SUCCESS_RATE, K_FAILURE_RATE):
-                raw = e.get(primary_key)
-            else:
-                agg = e.get("metrics", {}).get(primary_key)
-                raw = agg["mean"] if isinstance(agg, dict) else None
-            scored.append((e["tool"], raw))
-
-        values = [v for _, v in scored if v is not None]
-        v_min = min(values) if values else 0
-        v_max = max(values) if values else 1
-        span = v_max - v_min if v_max != v_min else 1.0
-
-        ranked = sorted(scored, key=lambda x: (x[1] is None, -(x[1] or 0)))
-        for rank, (tool, raw) in enumerate(ranked, start=1):
-            normalized = None
-            if raw is not None and values:
-                normalized = round((raw - v_min) / span, 4) if span else 1.0
-            rows.append({
-                "sub_task":         sub_task,
-                "tool":             tool,
-                "primary_metric":   primary_key,
-                "raw_score":        raw,
-                "normalized_score": normalized,
-                "rank":             rank,
-            })
-
-    return rows
-
-
-# ------------------------------------------------------------------ #
 # Helpers                                                              #
 # ------------------------------------------------------------------ #
 
@@ -569,16 +508,6 @@ def _mean(values: list[float]) -> float | None:
     if not values:
         return None
     return round(sum(values) / len(values), 4)
-
-
-def _write_csv(rows: list[dict], path: Path) -> None:
-    if not rows:
-        return
-    fieldnames = list(rows[0].keys())
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 if __name__ == "__main__":

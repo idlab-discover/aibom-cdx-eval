@@ -5,11 +5,14 @@ Reads results/aggregated/<run-id>_summary.json and produces PDF figures under:
   results/aggregated/figures/<run-id>/
 
 Figures:
-  fig1_t1_performance.pdf   — T1 latency and throughput
-  fig2_t1_boxplot.pdf       — T1 generation-time distribution (boxplot)
-  fig3_t2_reliability.pdf   — T2 success rate bar
-  fig4_t3_discovery.pdf     — T3 F1 / precision / recall (full + py scope)
-  fig5_t4_quality.pdf       — T4 CycloneDX conformance, completeness & breadth
+  fig1a_t1_latency.pdf        — T1 latency (mean duration)
+  fig1b_t1_throughput.pdf     — T1 throughput
+  fig2_t1_boxplot.pdf         — T1 generation-time distribution (boxplot)
+  fig3_t2_reliability.pdf     — T2 success rate bar
+  fig4a_t3_discovery_full.pdf — T3 F1 / precision / recall (full scope)
+  fig4b_t3_discovery_py.pdf   — T3 F1 / precision / recall (python-literal scope)
+  fig5a_t4_conformance.pdf    — T4 CycloneDX conformance
+  fig5b_t4_completeness.pdf   — T4 CycloneDX completeness & breadth
 
 Usage:
     python -m analysis.graphs --run-id <run-id>
@@ -109,11 +112,14 @@ def main(run_id: str) -> None:
 
     plt.rcParams.update(_RC)
 
-    _fig1_t1_performance(S, out_dir)
+    _fig1a_t1_latency(S, out_dir)
+    _fig1b_t1_throughput(S, out_dir)
     _fig2_t1_boxplot(S, run_id, out_dir)
     _fig3_t2_reliability(S, out_dir)
-    _fig4_t3_discovery(S, out_dir)
-    _fig5_t4_quality(S, out_dir)
+    _fig4a_t3_discovery_full(S, out_dir)
+    _fig4b_t3_discovery_py(S, out_dir)
+    _fig5a_t4_conformance(S, out_dir)
+    _fig5b_t4_completeness(S, out_dir)
 
     click.echo(f"Figures written to: {out_dir}")
 
@@ -122,45 +128,50 @@ def main(run_id: str) -> None:
 # Figure helpers                                                        #
 # ================================================================== #
 
-def _fig1_t1_performance(S: dict, out: Path) -> None:
-    """Figure 1 — T1: latency (mean duration) and throughput."""
+def _fig1a_t1_latency(S: dict, out: Path) -> None:
+    """Figure 1a — T1: latency (mean duration)."""
     tools  = [t for t in T1_TOOLS if f"{t}::{SUBTASK_T1}" in S]
     labels = [TOOL_LABELS[t] for t in tools]
     colors = [PALETTE[t] for t in tools]
-
-    throughput = [S[f"{t}::{SUBTASK_T1}"]["metrics"]["normalized_throughput"]["mean"] for t in tools]
-    duration   = [S[f"{t}::{SUBTASK_T1}"]["metrics"]["duration_seconds"]["mean"]      for t in tools]
-
+    duration = [S[f"{t}::{SUBTASK_T1}"]["metrics"]["duration_seconds"]["mean"] for t in tools]
     x = np.arange(len(tools))
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.5, 3.2))
-
-    # left: latency (mean duration)
-    ax = axes[0]
+    fig, ax = plt.subplots(figsize=(4.2, 3.2))
     bars = ax.bar(x, duration, color=colors, edgecolor="white", linewidth=0.6)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylabel("Mean duration (s)")
-    ax.set_title("(a) Latency")
+    ax.set_title("Latency")
     for bar, v in zip(bars, duration):
         ax.text(bar.get_x() + bar.get_width() / 2, v + 0.02, f"{v:.2f}s",
                 ha="center", va="bottom", fontsize=8)
-
-    # right: throughput
-    ax2 = axes[1]
-    bars2 = ax2.bar(x, throughput, color=colors, edgecolor="white", linewidth=0.6)
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(labels, rotation=20, ha="right")
-    ax2.set_ylabel("Throughput (fields / s)")
-    ax2.set_title("(b) Throughput")
-    for bar, v in zip(bars2, throughput):
-        ax2.text(bar.get_x() + bar.get_width() / 2, v + 0.5, f"{v:.1f}",
-                ha="center", va="bottom", fontsize=8)
-
     fig.tight_layout()
-    fig.savefig(out / "fig1_t1_performance.pdf", bbox_inches="tight")
+    fig.savefig(out / "fig1a_t1_latency.pdf", bbox_inches="tight")
     plt.close(fig)
-    click.echo("  Saved fig1_t1_performance.pdf")
+    click.echo("  Saved fig1a_t1_latency.pdf")
+
+
+def _fig1b_t1_throughput(S: dict, out: Path) -> None:
+    """Figure 1b — T1: throughput."""
+    tools  = [t for t in T1_TOOLS if f"{t}::{SUBTASK_T1}" in S]
+    labels = [TOOL_LABELS[t] for t in tools]
+    colors = [PALETTE[t] for t in tools]
+    throughput = [S[f"{t}::{SUBTASK_T1}"]["metrics"]["normalized_throughput"]["mean"] for t in tools]
+    x = np.arange(len(tools))
+
+    fig, ax = plt.subplots(figsize=(4.2, 3.2))
+    bars = ax.bar(x, throughput, color=colors, edgecolor="white", linewidth=0.6)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+    ax.set_ylabel("Throughput (fields / s)")
+    ax.set_title("Throughput")
+    for bar, v in zip(bars, throughput):
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.5, f"{v:.1f}",
+                ha="center", va="bottom", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out / "fig1b_t1_throughput.pdf", bbox_inches="tight")
+    plt.close(fig)
+    click.echo("  Saved fig1b_t1_throughput.pdf")
 
 
 def _fig2_t1_boxplot(S: dict, run_id: str, out: Path) -> None:
@@ -272,74 +283,90 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
     click.echo("  Saved fig3_t2_reliability.pdf")
 
 
-def _fig4_t3_discovery(S: dict, out: Path) -> None:
-    """Figure 4 — T3: F1 / precision / recall (full scope + python-literal scope)."""
+def _fig4a_t3_discovery_full(S: dict, out: Path) -> None:
+    """Figure 4a — T3: F1 / precision / recall (full scope)."""
     tools  = [t for t in T3_TOOLS if f"{t}::{SUBTASK_T3}" in S]
     labels = [TOOL_LABELS[t] for t in tools]
     colors = [PALETTE[t] for t in tools]
 
-    f1_full   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1"]["mean"]        for t in tools]
-    prec_full = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["precision"]["mean"]  for t in tools]
-    rec_full  = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall"]["mean"]     for t in tools]
-    f1_py     = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1_py"]["mean"]        for t in tools]
-    prec_py   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["precision_py"]["mean"]  for t in tools]
-    rec_py    = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall_py"]["mean"]     for t in tools]
+    f1_full   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1"]["mean"]       for t in tools]
+    prec_full = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["precision"]["mean"] for t in tools]
+    rec_full  = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall"]["mean"]    for t in tools]
 
     x3 = np.arange(len(tools))
     w3 = 0.25
 
-    fig, axes = plt.subplots(1, 2, figsize=(8.5, 3.6), sharey=False)
-
-    def _grouped_bar(ax: plt.Axes, data_sets: list, title: str) -> None:
-        offsets = np.linspace(-(len(data_sets) - 1) * w3 / 2,
-                              (len(data_sets) - 1) * w3 / 2, len(data_sets))
-        for offset, (vals, hatch) in zip(offsets, data_sets):
-            ax.bar(x3 + offset, vals, width=w3,
-                   color=colors, edgecolor="white",
-                   hatch=hatch, alpha=0.9 if hatch else 1.0)
-        ax.set_xticks(x3)
-        ax.set_xticklabels(labels, rotation=18, ha="right")
-        ax.set_ylim(0, 1.05)
-        ax.set_ylabel("Score")
-        ax.set_title(title)
-        patches = [mpatches.Patch(facecolor="grey",           label="F1"),
-                   mpatches.Patch(facecolor="grey", hatch="//", label="Precision"),
-                   mpatches.Patch(facecolor="grey", hatch="xx", label="Recall")]
-        ax.legend(handles=patches, frameon=False, fontsize=8)
-
-    _grouped_bar(axes[0],
-                 [(f1_full, None), (prec_full, "//"), (rec_full, "xx")],
-                 "(a) Full scope (all file types)")
-    _grouped_bar(axes[1],
-                 [(f1_py, None), (prec_py, "//"), (rec_py, "xx")],
-                 "(b) Python-literal scope (fair subset)")
-
+    fig, ax = plt.subplots(figsize=(5.0, 3.6))
+    offsets = np.linspace(-w3, w3, 3)
+    for offset, (vals, hatch) in zip(offsets, [(f1_full, None), (prec_full, "//"), (rec_full, "xx")]):
+        ax.bar(x3 + offset, vals, width=w3, color=colors, edgecolor="white",
+               hatch=hatch, alpha=0.9 if hatch else 1.0)
+    ax.set_xticks(x3)
+    ax.set_xticklabels(labels, rotation=18, ha="right")
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Score")
+    ax.set_title("Full scope (all file types)")
     tool_patches = [mpatches.Patch(color=PALETTE[t], label=TOOL_LABELS[t]) for t in tools]
-    axes[0].legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
-
+    ax.legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
+    metric_patches = [mpatches.Patch(facecolor="grey", label="F1"),
+                      mpatches.Patch(facecolor="grey", hatch="//", label="Precision"),
+                      mpatches.Patch(facecolor="grey", hatch="xx", label="Recall")]
+    ax.add_artist(ax.legend(handles=metric_patches, frameon=False, fontsize=8, loc="upper left"))
+    ax.legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
     fig.tight_layout()
-    fig.savefig(out / "fig4_t3_discovery.pdf", bbox_inches="tight")
+    fig.savefig(out / "fig4a_t3_discovery_full.pdf", bbox_inches="tight")
     plt.close(fig)
-    click.echo("  Saved fig4_t3_discovery.pdf")
+    click.echo("  Saved fig4a_t3_discovery_full.pdf")
 
 
-def _fig5_t4_quality(S: dict, out: Path) -> None:
-    """Figure 5 — T4: CycloneDX conformance, completeness & breadth."""
-    # Gather all unique tools; prefer G1 data when a tool appears in both groups.
+def _fig4b_t3_discovery_py(S: dict, out: Path) -> None:
+    """Figure 4b — T3: F1 / precision / recall (python-literal scope)."""
+    tools  = [t for t in T3_TOOLS if f"{t}::{SUBTASK_T3}" in S]
+    labels = [TOOL_LABELS[t] for t in tools]
+    colors = [PALETTE[t] for t in tools]
+
+    f1_py   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1_py"]["mean"]        for t in tools]
+    prec_py = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["precision_py"]["mean"] for t in tools]
+    rec_py  = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall_py"]["mean"]    for t in tools]
+
+    x3 = np.arange(len(tools))
+    w3 = 0.25
+
+    fig, ax = plt.subplots(figsize=(5.0, 3.6))
+    offsets = np.linspace(-w3, w3, 3)
+    for offset, (vals, hatch) in zip(offsets, [(f1_py, None), (prec_py, "//"), (rec_py, "xx")]):
+        ax.bar(x3 + offset, vals, width=w3, color=colors, edgecolor="white",
+               hatch=hatch, alpha=0.9 if hatch else 1.0)
+    ax.set_xticks(x3)
+    ax.set_xticklabels(labels, rotation=18, ha="right")
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Score")
+    ax.set_title("Python-literal scope (fair subset)")
+    metric_patches = [mpatches.Patch(facecolor="grey", label="F1"),
+                      mpatches.Patch(facecolor="grey", hatch="//", label="Precision"),
+                      mpatches.Patch(facecolor="grey", hatch="xx", label="Recall")]
+    ax.legend(handles=metric_patches, frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out / "fig4b_t3_discovery_py.pdf", bbox_inches="tight")
+    plt.close(fig)
+    click.echo("  Saved fig4b_t3_discovery_py.pdf")
+
+
+def _fig5a_t4_conformance(S: dict, out: Path) -> None:
+    """Figure 5a — T4: CycloneDX conformance rate."""
     all_t4_tools = T4G1_TOOLS + [t for t in T4G2_TOOLS if t not in T4G1_TOOLS]
     tools: list[str] = []
     subtasks: list[str] = []
     for t in all_t4_tools:
         if f"{t}::{SUBTASK_T4G1}" in S:
-            tools.append(t)
-            subtasks.append(SUBTASK_T4G1)
+            tools.append(t); subtasks.append(SUBTASK_T4G1)
         elif f"{t}::{SUBTASK_T4G2}" in S:
-            tools.append(t)
-            subtasks.append(SUBTASK_T4G2)
+            tools.append(t); subtasks.append(SUBTASK_T4G2)
 
     labels = [TOOL_LABELS[t] for t in tools]
     colors = [PALETTE[t] for t in tools]
     x = np.arange(len(tools))
+    w2 = 0.35
 
     def _metric(t: str, st: str, key: str) -> float:
         val = S[f"{t}::{st}"]["metrics"][key]
@@ -347,55 +374,73 @@ def _fig5_t4_quality(S: dict, out: Path) -> None:
 
     conform_v16 = [_metric(t, st, "cdx_conformance_pass_rate_v16") for t, st in zip(tools, subtasks)]
     conform_v17 = [_metric(t, st, "cdx_conformance_pass_rate_v17") for t, st in zip(tools, subtasks)]
-    complt_v16  = [_metric(t, st, "cdx_completeness_pct_v16")      for t, st in zip(tools, subtasks)]
-    complt_v17  = [_metric(t, st, "cdx_completeness_pct_v17")      for t, st in zip(tools, subtasks)]
-    breadth_v16 = [_metric(t, st, "cdx_breadth_pct_v16")           for t, st in zip(tools, subtasks)]
-    breadth_v17 = [_metric(t, st, "cdx_breadth_pct_v17")           for t, st in zip(tools, subtasks)]
 
-    w2 = 0.35
-    w4 = 0.18
-
-    fig, axes = plt.subplots(1, 2, figsize=(11, 3.8))
-
-    # Left — conformance rate (2 bars per tool: v1.6 solid, v1.7 hatched)
-    ax = axes[0]
-    ax.bar(x - w2 / 2, conform_v16, width=w2, color=colors, edgecolor="white", label="v1.6")
+    fig, ax = plt.subplots(figsize=(5.5, 3.8))
+    ax.bar(x - w2 / 2, conform_v16, width=w2, color=colors, edgecolor="white")
     ax.bar(x + w2 / 2, conform_v17, width=w2, color=colors, edgecolor="white",
-           hatch="//", alpha=0.7, label="v1.7")
+           hatch="//", alpha=0.7)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("Conformance pass rate")
-    ax.set_title("(a) CycloneDX Conformance")
+    ax.set_title("CycloneDX Conformance")
     v16_patch = mpatches.Patch(facecolor="grey", label="v1.6")
     v17_patch = mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="v1.7")
     ax.legend(handles=[v16_patch, v17_patch], frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out / "fig5a_t4_conformance.pdf", bbox_inches="tight")
+    plt.close(fig)
+    click.echo("  Saved fig5a_t4_conformance.pdf")
 
-    # Right — completeness + breadth (4 bars per tool)
-    ax2 = axes[1]
+
+def _fig5b_t4_completeness(S: dict, out: Path) -> None:
+    """Figure 5b — T4: CycloneDX completeness & breadth."""
+    all_t4_tools = T4G1_TOOLS + [t for t in T4G2_TOOLS if t not in T4G1_TOOLS]
+    tools: list[str] = []
+    subtasks: list[str] = []
+    for t in all_t4_tools:
+        if f"{t}::{SUBTASK_T4G1}" in S:
+            tools.append(t); subtasks.append(SUBTASK_T4G1)
+        elif f"{t}::{SUBTASK_T4G2}" in S:
+            tools.append(t); subtasks.append(SUBTASK_T4G2)
+
+    labels = [TOOL_LABELS[t] for t in tools]
+    colors = [PALETTE[t] for t in tools]
+    x = np.arange(len(tools))
+    w4 = 0.18
+
+    def _metric(t: str, st: str, key: str) -> float:
+        val = S[f"{t}::{st}"]["metrics"][key]
+        return val["mean"] if isinstance(val, dict) else float(val)
+
+    complt_v16  = [_metric(t, st, "cdx_completeness_pct_v16") for t, st in zip(tools, subtasks)]
+    complt_v17  = [_metric(t, st, "cdx_completeness_pct_v17") for t, st in zip(tools, subtasks)]
+    breadth_v16 = [_metric(t, st, "cdx_breadth_pct_v16")      for t, st in zip(tools, subtasks)]
+    breadth_v17 = [_metric(t, st, "cdx_breadth_pct_v17")      for t, st in zip(tools, subtasks)]
+
     bar_groups = [
-        (complt_v16, "Completeness v1.6", {}),
-        (complt_v17, "Completeness v1.7", {"hatch": "//", "alpha": 0.7}),
-        (breadth_v16, "Breadth v1.6",     {"hatch": "xx"}),
-        (breadth_v17, "Breadth v1.7",     {"hatch": "xx", "alpha": 0.7}),
+        (complt_v16,  "Completeness v1.6", {}),
+        (complt_v17,  "Completeness v1.7", {"hatch": "//", "alpha": 0.7}),
+        (breadth_v16, "Breadth v1.6",      {"hatch": "xx"}),
+        (breadth_v17, "Breadth v1.7",      {"hatch": "xx", "alpha": 0.7}),
     ]
     offsets = [-1.5 * w4, -0.5 * w4, 0.5 * w4, 1.5 * w4]
-    for offset, (vals, _label, kwargs) in zip(offsets, bar_groups):
-        ax2.bar(x + offset, vals, width=w4, color=colors, edgecolor="white", **kwargs)
 
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(labels, rotation=20, ha="right")
-    ax2.set_ylabel("Coverage score (×100 = %)")
-    ax2.set_title("(b) Completeness & Breadth")
+    fig, ax = plt.subplots(figsize=(6.5, 3.8))
+    for offset, (vals, _label, kwargs) in zip(offsets, bar_groups):
+        ax.bar(x + offset, vals, width=w4, color=colors, edgecolor="white", **kwargs)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+    ax.set_ylabel("Coverage score (\u00d7100 = %)")
+    ax.set_title("Completeness & Breadth")
     patches = [
         mpatches.Patch(facecolor="grey",                        label="Completeness v1.6"),
         mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="Completeness v1.7"),
         mpatches.Patch(facecolor="grey", hatch="xx",            label="Breadth v1.6"),
         mpatches.Patch(facecolor="grey", hatch="xx", alpha=0.7, label="Breadth v1.7"),
     ]
-    ax2.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper right")
-
+    ax.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper right")
     fig.tight_layout()
-    fig.savefig(out / "fig5_t4_quality.pdf", bbox_inches="tight")
+    fig.savefig(out / "fig5b_t4_completeness.pdf", bbox_inches="tight")
     plt.close(fig)
-    click.echo("  Saved fig5_t4_quality.pdf")
+    click.echo("  Saved fig5b_t4_completeness.pdf")

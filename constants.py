@@ -19,6 +19,7 @@ EVAL_ROOT = Path(__file__).parent
 
 RESULTS_DIR    = EVAL_ROOT / "results" / "runs"
 AGGREGATED_DIR = EVAL_ROOT / "results" / "aggregated"
+GROUPS_DIR     = EVAL_ROOT / "results" / "groups"
 REPORTS_DIR    = AGGREGATED_DIR / "reports"
 FIGURES_DIR    = AGGREGATED_DIR / "figures"
 GT_DIR         = EVAL_ROOT / "benchmarks" / "ground-truth" / "T3-source-scan"
@@ -106,9 +107,3 @@ DETERMINISM_ENV: dict[str, str] = {
     "PYTHONHASHSEED":    "42",
     "TRANSFORMERS_SEED": "42",
 }
-
-HF_TOKEN_ENVVARS: frozenset[str] = frozenset({
-    "HF_TOKEN",
-    "HF_HUB_TOKEN",
-    "HUGGINGFACE_TOKEN",
-})
