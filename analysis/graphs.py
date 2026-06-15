@@ -7,7 +7,8 @@ Reads results/aggregated/<run-id>_summary.json and produces PDF figures under:
 Figures:
   fig1_t1_performance.pdf   — T1 latency and throughput
   fig2_t1_boxplot.pdf       — T1 generation-time distribution (boxplot)
-  fig3_t3_discovery.pdf     — T3 F1 / precision / recall (full + py scope)
+  fig3_t2_reliability.pdf   — T2 success rate bar
+  fig4_t3_discovery.pdf     — T3 F1 / precision / recall (full + py scope)
   fig5_t4_quality.pdf       — T4 CycloneDX conformance, completeness & breadth
 
 Usage:
@@ -30,9 +31,12 @@ import numpy as np
 
 from constants import (
     AGGREGATED_DIR,
+    EC_CRASH,
+    EC_UNAUTHORIZED_DOWNLOAD,
     FIGURES_DIR,
     RESULTS_DIR,
     SUBTASK_T1,
+    SUBTASK_T2,
     SUBTASK_T3,
     SUBTASK_T4G1,
     SUBTASK_T4G2,
@@ -78,6 +82,7 @@ TOOL_LABELS: dict[str, str] = {
 # ── Tool groups (mirrors the notebook) ─────────────────────────────────────
 
 T1_TOOLS  = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
+T2_TOOLS  = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T3_TOOLS  = ["aibomgen-cli", "trusera-aibom", "jorisbot-aibom", "akumar-aibom"]
 T4G1_TOOLS = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T4G2_TOOLS = ["aibomgen-cli", "akumar-aibom", "trusera-aibom"]
@@ -106,7 +111,8 @@ def main(run_id: str) -> None:
 
     _fig1_t1_performance(S, out_dir)
     _fig2_t1_boxplot(S, run_id, out_dir)
-    _fig3_t3_discovery(S, out_dir)
+    _fig3_t2_reliability(S, out_dir)
+    _fig4_t3_discovery(S, out_dir)
     _fig5_t4_quality(S, out_dir)
 
     click.echo(f"Figures written to: {out_dir}")
@@ -224,8 +230,50 @@ def _fig2_t1_boxplot(S: dict, run_id: str, out: Path) -> None:
     click.echo("  Saved fig2_t1_boxplot.pdf")
 
 
-def _fig3_t3_discovery(S: dict, out: Path) -> None:
-    """Figure 3 — T3: F1 / precision / recall (full scope + python-literal scope)."""
+def _fig3_t2_reliability(S: dict, out: Path) -> None:
+    """Figure 3 — T2: success rate bar (with crash / auth-error overlay)."""
+    tools = [t for t in T2_TOOLS if f"{t}::{SUBTASK_T2}" in S]
+    labels = [TOOL_LABELS[t] for t in tools]
+    colors = [PALETTE[t] for t in tools]
+
+    def _frac(tool: str, ec: str) -> float:
+        entry = S[f"{tool}::{SUBTASK_T2}"]
+        total = max(entry.get("total_runs", 1), 1)
+        return entry.get("error_breakdown", {}).get(ec, 0) / total
+
+    success_frac = [S[f"{t}::{SUBTASK_T2}"]["success_rate"] for t in tools]
+    crash_frac   = [_frac(t, EC_CRASH) for t in tools]
+    unauth_frac  = [_frac(t, EC_UNAUTHORIZED_DOWNLOAD) for t in tools]
+
+    x2 = np.arange(len(tools))
+
+    fig, ax = plt.subplots(figsize=(5, 3.5))
+
+    ax.bar(x2, success_frac, color=colors, edgecolor="white", label="Success")
+    ax.bar(x2, crash_frac, bottom=success_frac,
+           color="black", alpha=0.65, edgecolor="white", label="Crash")
+    ax.bar(x2, unauth_frac,
+           bottom=[s + c for s, c in zip(success_frac, crash_frac)],
+           color="grey", alpha=0.65, edgecolor="white", hatch="xx", label="Auth error")
+
+    ax.set_xticks(x2)
+    ax.set_xticklabels(labels, rotation=18, ha="right")
+    ax.set_ylim(0, 1.12)
+    ax.set_ylabel("Fraction of runs")
+    ax.legend(frameon=False)
+
+    for i, v in enumerate(success_frac):
+        ax.text(i, v / 2, f"{v * 100:.0f}%", ha="center", va="center",
+                color="white", fontsize=9, fontweight="bold")
+
+    fig.tight_layout()
+    fig.savefig(out / "fig3_t2_reliability.pdf", bbox_inches="tight")
+    plt.close(fig)
+    click.echo("  Saved fig3_t2_reliability.pdf")
+
+
+def _fig4_t3_discovery(S: dict, out: Path) -> None:
+    """Figure 4 — T3: F1 / precision / recall (full scope + python-literal scope)."""
     tools  = [t for t in T3_TOOLS if f"{t}::{SUBTASK_T3}" in S]
     labels = [TOOL_LABELS[t] for t in tools]
     colors = [PALETTE[t] for t in tools]
@@ -270,9 +318,9 @@ def _fig3_t3_discovery(S: dict, out: Path) -> None:
     axes[0].legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
 
     fig.tight_layout()
-    fig.savefig(out / "fig3_t3_discovery.pdf", bbox_inches="tight")
+    fig.savefig(out / "fig4_t3_discovery.pdf", bbox_inches="tight")
     plt.close(fig)
-    click.echo("  Saved fig3_t3_discovery.pdf")
+    click.echo("  Saved fig4_t3_discovery.pdf")
 
 
 def _fig5_t4_quality(S: dict, out: Path) -> None:
