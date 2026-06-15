@@ -36,8 +36,6 @@ from constants import (
     K_CDX_CONFORMANCE_PASS_V17,
     K_FIELDS_PRESENT,
     K_NORMALIZED_THROUGHPUT,
-    K_SIZE_NORM_THROUGHPUT,
-    K_SUCCESS_RATE,
     REPORTS_DIR,
     RESULTS_DIR,
     SUB_TASK_DESCRIPTIONS,
@@ -113,17 +111,16 @@ def _build_report(run_id: str, summary: dict) -> list[str]:
 def _t1_table(entries: list[dict]) -> list[str]:
     lines: list[str] = [
         "$$",
-        r"\text{throughput} = \frac{\text{fields\_present}}{\text{duration\_s}} \qquad \text{size-norm throughput} = \frac{\text{fields\_present}}{\text{output\_bytes}}",
+        r"\text{throughput} = \frac{\text{fields\_present}}{\text{duration\_s}}",
         "$$",
         "",
     ]
     cols = [
-        (K_NORMALIZED_THROUGHPUT, "Throughput (fields/s)"),
-        (K_SIZE_NORM_THROUGHPUT,  "Size-norm throughput (fields/byte)"),
         (K_FIELDS_PRESENT,        "Fields present (mean)"),
         ("duration_seconds",      "Duration (s, mean)"),
+        (K_NORMALIZED_THROUGHPUT, "Throughput (fields/s)"),
     ]
-    lines += _metric_table(entries, cols, extra_cols=[(K_SUCCESS_RATE, "Success rate")])
+    lines += _metric_table(entries, cols)
     return lines
 
 
