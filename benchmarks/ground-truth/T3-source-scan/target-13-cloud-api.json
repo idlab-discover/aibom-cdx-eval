@@ -1,8 +1,8 @@
 {
-  "_comment": "Ground truth for target-10 (synthetic). Annotated detectable model references.",
+  "_comment": "Ground truth for target-10-cloud-api (synthetic). Annotated detectable model references.",
   "_method": "Manual annotation from synthetic source files.",
-  "target": "target-10",
-  "target_path": "targets/target-10",
+  "target": "target-10-cloud-api",
+  "target_path": "targets/target-10-cloud-api",
   "models": [
     {
       "id": "mistralai/Mistral-7B-Instruct-v0.2",

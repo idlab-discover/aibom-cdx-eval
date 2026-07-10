@@ -1,8 +1,8 @@
 {
-  "_comment": "Ground truth for target-04 (synthetic). Annotated detectable model references.",
+  "_comment": "Ground truth for target-03-python (synthetic). Annotated detectable model references.",
   "_method": "Manual annotation from synthetic source files.",
-  "target": "target-04",
-  "target_path": "targets/target-04",
+  "target": "target-03-python",
+  "target_path": "targets/target-03-python",
   "models": [
     {
       "id": "facebook/bart-large-cnn",

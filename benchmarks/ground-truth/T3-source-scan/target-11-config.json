@@ -1,8 +1,8 @@
 {
-  "_comment": "Ground truth for target-11 (synthetic). Annotated detectable model references.",
+  "_comment": "Ground truth for target-11-config (synthetic). Annotated detectable model references.",
   "_method": "Manual annotation from synthetic source files.",
-  "target": "target-11",
-  "target_path": "targets/target-11",
+  "target": "target-11-config",
+  "target_path": "targets/target-11-config",
   "models": [
     {
       "id": "deepseek-ai/deepseek-coder-1.3b-instruct",

@@ -9,8 +9,8 @@
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B (Dockerfile: ARG expansion — not detectable)",
     "distilbert-base-uncased (model_config.json: no org/ prefix — single-segment name)"
   ],
-  "target": "target-03",
-  "target_path": "targets/target-03",
+  "target": "target-05-mixed",
+  "target_path": "targets/target-05-mixed",
   "models": [
     {
       "id": "meta-llama/Llama-3.1-8B",

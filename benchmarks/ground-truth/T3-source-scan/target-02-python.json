@@ -4,8 +4,8 @@
   "_notes": {
     "templates/model-card-example": "Unusual format — org=templates; some scanners may reject as invalid HF ID. Included as detectable=true since it follows org/model format and is literally in the source."
   },
-  "target": "target-02",
-  "target_path": "targets/target-02",
+  "target": "target-02-python",
+  "target_path": "targets/target-02-python",
   "models": [
     {
       "id": "WiebeVandendriessche/model-card-example",

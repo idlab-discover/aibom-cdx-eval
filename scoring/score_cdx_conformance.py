@@ -29,17 +29,11 @@ from constants import (
 _SCHEMAS = {
     "v16": {
         "path": SCHEMA_DIR / "cyclonedx-1.6.schema.json",
-        "url": (
-            "https://raw.githubusercontent.com/CycloneDX/specification/"
-            "master/schema/bom-1.6.schema.json"
-        ),
+        "url": "https://cyclonedx.org/schema/bom-1.6.schema.json",
     },
     "v17": {
         "path": SCHEMA_DIR / "cyclonedx-1.7.schema.json",
-        "url": (
-            "https://raw.githubusercontent.com/CycloneDX/specification/"
-            "master/schema/bom-1.7.schema.json"
-        ),
+        "url": "https://cyclonedx.org/schema/bom-1.7.schema.json",
     },
 }
 

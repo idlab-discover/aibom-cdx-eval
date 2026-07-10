@@ -1,8 +1,8 @@
 {
-  "_comment": "Ground truth for target-07 (synthetic). Annotated detectable model references.",
+  "_comment": "Ground truth for target-07-config (synthetic). Annotated detectable model references.",
   "_method": "Manual annotation from synthetic source files.",
-  "target": "target-07",
-  "target_path": "targets/target-07",
+  "target": "target-07-config",
+  "target_path": "targets/target-07-config",
   "models": [
     {
       "id": "meta-llama/Llama-2-7b-chat-hf",

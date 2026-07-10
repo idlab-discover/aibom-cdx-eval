@@ -1,8 +1,8 @@
 {
-  "_comment": "Ground truth for target-14 (synthetic). Annotated detectable model references.",
+  "_comment": "Ground truth for target-04-python (synthetic). Annotated detectable model references.",
   "_method": "Manual annotation from synthetic source files.",
-  "target": "target-14",
-  "target_path": "targets/target-14",
+  "target": "target-04-python",
+  "target_path": "targets/target-04-python",
   "models": [
     {
       "id": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",

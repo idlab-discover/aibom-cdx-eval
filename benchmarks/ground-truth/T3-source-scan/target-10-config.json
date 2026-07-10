@@ -1,8 +1,8 @@
 {
-  "_comment": "Ground truth for target-06 (synthetic). Annotated detectable model references.",
+  "_comment": "Ground truth for target-10-config (synthetic). Annotated detectable model references.",
   "_method": "Manual annotation from synthetic source files.",
-  "target": "target-06",
-  "target_path": "targets/target-06",
+  "target": "target-10-config",
+  "target_path": "targets/target-10-config",
   "models": [
     {
       "id": "microsoft/phi-2",

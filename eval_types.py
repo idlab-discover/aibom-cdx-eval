@@ -18,6 +18,7 @@ class DatasetConfig(TypedDict, total=False):
     type: str
     ground_truth: str
     notes: str
+    scope_bucket: str
 
 
 class TaskConfig(TypedDict, total=False):
@@ -35,6 +36,7 @@ class JobSpec(TypedDict):
     task: str
     dataset: str
     input_spec: str
+    repeat_index: int
     ground_truth: str
     hf_token_env: str
     tool_config: dict[str, Any]

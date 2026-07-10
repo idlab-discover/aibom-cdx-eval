@@ -56,7 +56,7 @@ Each tool invocation is tagged as one of two execution tasks. Aggregation then d
 | Task | Description | Tools | Datasets |
 |---|---|---|---|
 | **T1\_T2** | HF model ID → AIBOM | aibomgen-cli, aibom-generator, ALOHA, lab700xorg-aisbom | `popular` (top 500 HF models by downloads) — capped at `--limit` per run (default: 100) |
-| **T3\_T4G2** | Source-code directory → AIBOM | aibomgen-cli, akumar-aibom, jorisbot-aibom, trusera-aibom | `target-01` through `target-18` (18 synthetic repos) |
+| **T3\_T4G2** | Source-code directory → AIBOM | aibomgen-cli, akumar-aibom, jorisbot-aibom, trusera-aibom | 16 scoped synthetic repos (target-01-python .. target-16-cloud-api) |
 
 ### Scored sub-tasks (derived from the above results)
 
@@ -64,7 +64,7 @@ Each tool invocation is tagged as one of two execution tasks. Aggregation then d
 |---|---|---|---|
 | **T1** | T1\_T2 | `normalized_throughput` | AIBOM generation performance |
 | **T2** | T1\_T2 | `success_rate` | Reliability / failure-rate analysis |
-| **T3** | T3\_T4G2 | `f1` | Model discovery precision / recall |
+| **T3** | T3\_T4G2 | `f1` | Model discovery precision / recall (primary leaderboard excludes `jorisbot-aibom`; Python-only appendix reports it separately) |
 | **T4-G1** | T1\_T2 (CDX tools only) | `cdx_completeness_pct_v16` | CycloneDX quality for HF-ID tools |
 | **T4-G2** | T3\_T4G2 (CDX tools only) | `cdx_completeness_pct_v16` | CycloneDX quality for source-scan tools |
 
@@ -75,72 +75,33 @@ Comparisons are always **within-group**: T1/T2/T4-G1 cover HF-ID tools; T3/T4-G2
 ## Usage
 
 ```bash
-# ── Single run ────────────────────────────────────────────────────────────
-uv run eval run-local
-uv run eval run-local --run-id eval-007          # explicit run ID
+# ── Run ───────────────────────────────────────────────────────────────────
+uv run eval run
+uv run eval run --run-id eval-007
 
-# ── Targeted runs ─────────────────────────────────────────────────────────
-uv run eval run-local --tasks T1_T2 --tools aibomgen-cli,aibom-generator
-uv run eval run-local --tasks T3_T4G2 --tools akumar-aibom
-uv run eval run-local --limit 5                  # 5 model IDs per dataset
-uv run eval run-local --cooldown 2               # 2-minute cooldown between tool/task groups (default: 5)
+# Repeat T1_T2 jobs under the same run-id (for variance studies)
+uv run eval run --run-id eval-007 --n 3
 
-# ── Grouped runs (N repetitions under a single label) ─────────────────────
-uv run eval run-local --group paperv1 -n 10               # 10 runs labelled paperv1
-uv run eval run-local --group paperv1 -n 10 --background  # same, forked to background
+# Targeted run filters
+uv run eval run --tasks T1_T2 --tools aibomgen-cli,aibom-generator
+uv run eval run --tasks T3_T4G2 --tools akumar-aibom
+uv run eval run --limit 5
+uv run eval run --cooldown 2
+uv run eval run --run-id eval-007 --background
+
+# Follow background progress
+tail -f results/runs/eval-007/run.log
+uv run eval status --run-id eval-007
 
 # ── Status ────────────────────────────────────────────────────────────────
-uv run eval status                               # latest run or group (auto-detected)
-uv run eval status --run-id eval-007             # specific single run
-uv run eval status --group paperv1              # all runs in a group
+uv run eval status
+uv run eval status --run-id eval-007
 
-# ── Aggregate a single run ────────────────────────────────────────────────
-uv run eval aggregate                            # latest run
+# ── Aggregate (summary + figures) ────────────────────────────────────────
 uv run eval aggregate --run-id eval-007
 # Outputs:
 #   results/aggregated/eval-007_summary.json
-#   results/aggregated/reports/eval-007.md
 #   results/aggregated/figures/eval-007/
-
-# ── Aggregate a group (merges all N runs, then report + graphs) ───────────
-uv run eval aggregate-group --group paperv1
-# Outputs:
-#   results/aggregated/paperv1_summary.json   (mean-of-means + std across runs)
-#   results/aggregated/paperv1_meta.json      (run IDs, n_runs)
-#   results/aggregated/reports/paperv1.md
-#   results/aggregated/figures/paperv1/
-
-# ── Figures only ──────────────────────────────────────────────────────────
-uv run eval graphs --run-id eval-007
-uv run eval graphs --run-id paperv1
-```
-
-### Background runs
-
-Use `--background` to fork into the background and return immediately.
-The process survives terminal close (detached via `setsid`).
-
-Single run in background:
-```bash
-uv run eval run-local --run-id eval-007 --background
-# → Run ID : eval-007
-# → PID    : 12345
-# → Log    : results/runs/eval-007/run.log
-
-tail -f results/runs/eval-007/run.log
-uv run eval status --run-id eval-007
-```
-
-Grouped runs in background — log is written to the group directory:
-```bash
-uv run eval run-local --group paperv1 -n 10 --background
-# → Runs   : eval-001, eval-002, …, eval-010
-# → PID    : 12346
-# → Log    : results/groups/paperv1/run.log
-
-tail -f results/groups/paperv1/run.log
-uv run eval status --group paperv1
-uv run eval aggregate-group --group paperv1
 ```
 
 ---
@@ -161,7 +122,7 @@ CycloneDX schemas (v1.6, v1.7) are in `schemas/`. Completeness is measured again
 
 ## Result Schema
 
-Every job writes `results/runs/<run-id>/<tool>/<task>/<dataset>/<input-slug>/metrics.json`:
+Every job writes `results/runs/<run-id>/<tool>/<task>/<dataset>/<input-slug>/rNN/metrics.json`:
 
 ```jsonc
 {
@@ -208,14 +169,14 @@ Full schema: [`schemas/result.schema.json`](schemas/result.schema.json)
 3. Create `runners/run_<tool_id>.py` inheriting from `BaseRunner` — implement `build_command()`, `locate_output()`, and `score()`.
 4. If the tool emits non-CycloneDX JSON, add a parser to `scoring/extract.py`.
 5. Register it in `runners/__init__.py` `REGISTRY`.
-6. Run `uv run eval run-local --run-id test --tools <tool-id>` to verify.
+6. Run `uv run eval run --run-id test --tools <tool-id>` to verify.
 
 ## Adding a New Task
 
 1. Define the task under `tasks:` in `orchestrator/config.yaml` with datasets and ground-truth references.
 2. Add ground-truth files under `benchmarks/ground-truth/<task>/`.
 3. Add a scorer under `scoring/` if needed and wire it into the relevant runners' `score()` method.
-4. Add a table renderer in `analysis/report.py` for the new sub-task.
+4. Add figure rendering support in `analysis/graphs.py` for any new surfaced metrics.
 
 ---
 
@@ -248,10 +209,8 @@ aibomgen-cli-eval/
 │   ├── score_cdx_conformance.py          T4 schema validation (v1.6 + v1.7)
 │   ├── score_cdx_completeness.py         T4 field-coverage percentage
 │   ├── aggregate.py                      single-run cross-tool summary
-│   ├── aggregate_multi.py                merge summaries across N runs
 │   └── utils.py                          shared helpers (pass_rate, resolve_ground_truth_path)
 ├── analysis/
-│   ├── report.py                         Markdown report generator
 │   └── graphs.py                         publication-ready PDF figure generator
 ├── benchmarks/
 │   ├── datasets/
@@ -259,9 +218,9 @@ aibomgen-cli-eval/
 │   │   │   └── popular.json              500 popular HF models
 │   │   └── security-test-set.json
 │   └── ground-truth/
-│       └── T3-source-scan/               target-01.json … target-18.json
+│       └── T3-source-scan/               scoped target-*.json files (16 active)
 ├── targets/
-│   └── target-01 … target-18/            synthetic source repos for T3 scanning
+│   └── scoped target-* directories (16 active, e.g. target-01-python, target-13-cloud-api)
 ├── tools/
 │   ├── ALOHA/                            bundled (no upstream repo)
 │   ├── aibom-generator/                  git submodule
@@ -279,14 +238,9 @@ aibomgen-cli-eval/
     ├── runs/<run-id>/
     │   ├── checkpoint.json
     │   ├── job_index.json
-    │   ├── run.log                       present when run with --background
-    │   ├── run.pid                       present when run with --background
-    │   └── <tool>/<task>/<dataset>/<input-slug>/metrics.json
+    │   └── <tool>/<task>/<dataset>/<input-slug>/rNN/metrics.json
     └── aggregated/
         ├── <run-id>_summary.json
-        ├── <label>_summary.json          aggregate-multi output
-        ├── <label>_meta.json             aggregate-multi metadata
-        ├── reports/<run-id>.md
         └── figures/<run-id>/
 ```
 

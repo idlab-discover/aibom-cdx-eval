@@ -1,8 +1,8 @@
 {
   "_comment": "Ground truth for target-1. Source: aibomgen-cli/targets/target-1/src/use_model.py",
   "_method": "Manual annotation from source — all models loaded via AutoModel/AutoTokenizer.from_pretrained()",
-  "target": "target-01",
-  "target_path": "targets/target-01",
+  "target": "target-01-python",
+  "target_path": "targets/target-01-python",
   "models": [
     {
       "id": "google-bert/bert-base-uncased",

@@ -10,13 +10,15 @@ Figures:
   fig2_t1_boxplot.pdf         — T1 generation-time distribution (boxplot)
   fig3_t2_reliability.pdf     — T2 success rate bar
   fig4a_t3_discovery_full.pdf — T3 F1 / precision / recall (full scope)
-  fig4b_t3_discovery_py.pdf   — T3 F1 / precision / recall (python-literal scope)
-  fig5a_t4_conformance.pdf    — T4 CycloneDX conformance
-  fig5b_t4_completeness.pdf   — T4 CycloneDX completeness & breadth
+    fig4b_t3_discovery_py.pdf   — T3 F1 / precision / recall (python scope + joris python-only comparator)
+    fig5a_t4_conformance_g1.pdf — T4-G1 CycloneDX conformance
+    fig5a_t4_conformance_g2.pdf — T4-G2 CycloneDX conformance
+    fig5b_t4_completeness_g1.pdf — T4-G1 CycloneDX completeness & breadth
+    fig5b_t4_completeness_g2.pdf — T4-G2 CycloneDX completeness & breadth
 
 Usage:
     python -m analysis.graphs --run-id <run-id>
-    uv run eval graphs --run-id <run-id>
+    uv run eval aggregate --run-id <run-id>
 """
 
 from __future__ import annotations
@@ -86,7 +88,8 @@ TOOL_LABELS: dict[str, str] = {
 
 T1_TOOLS  = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T2_TOOLS  = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
-T3_TOOLS  = ["aibomgen-cli", "trusera-aibom", "jorisbot-aibom", "akumar-aibom"]
+T3_TOOLS  = ["aibomgen-cli", "trusera-aibom", "akumar-aibom"]
+T3_APPENDIX_TOOLS = ["jorisbot-aibom"]
 T4G1_TOOLS = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T4G2_TOOLS = ["aibomgen-cli", "akumar-aibom", "trusera-aibom"]
 
@@ -107,6 +110,12 @@ def main(run_id: str) -> None:
     with open(summary_path) as f:
         S: dict[str, Any] = json.load(f)
 
+    meta_path = AGGREGATED_DIR / f"{run_id}_meta.json"
+    group_meta: dict[str, Any] | None = None
+    if meta_path.exists():
+        with open(meta_path) as f:
+            group_meta = json.load(f)
+
     out_dir = FIGURES_DIR / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -114,12 +123,14 @@ def main(run_id: str) -> None:
 
     _fig1a_t1_latency(S, out_dir)
     _fig1b_t1_throughput(S, out_dir)
-    _fig2_t1_boxplot(S, run_id, out_dir)
+    _fig2_t1_boxplot(S, run_id, out_dir, group_meta)
     _fig3_t2_reliability(S, out_dir)
     _fig4a_t3_discovery_full(S, out_dir)
     _fig4b_t3_discovery_py(S, out_dir)
-    _fig5a_t4_conformance(S, out_dir)
-    _fig5b_t4_completeness(S, out_dir)
+    _fig5a_t4_conformance_group(S, out_dir, SUBTASK_T4G1, T4G1_TOOLS, "g1")
+    _fig5a_t4_conformance_group(S, out_dir, SUBTASK_T4G2, T4G2_TOOLS, "g2")
+    _fig5b_t4_completeness_group(S, out_dir, SUBTASK_T4G1, T4G1_TOOLS, "g1")
+    _fig5b_t4_completeness_group(S, out_dir, SUBTASK_T4G2, T4G2_TOOLS, "g2")
 
     click.echo(f"Figures written to: {out_dir}")
 
@@ -174,19 +185,31 @@ def _fig1b_t1_throughput(S: dict, out: Path) -> None:
     click.echo("  Saved fig1b_t1_throughput.pdf")
 
 
-def _fig2_t1_boxplot(S: dict, run_id: str, out: Path) -> None:
+def _fig2_t1_boxplot(
+    S: dict,
+    run_id: str,
+    out: Path,
+    group_meta: dict[str, Any] | None = None,
+) -> None:
     """Figure 2 — T1: generation-time distribution (boxplot)."""
-    run_base = RESULTS_DIR / run_id
+    run_ids = [run_id]
+    if isinstance(group_meta, dict):
+        maybe_ids = group_meta.get("run_ids")
+        if isinstance(maybe_ids, list) and maybe_ids:
+            run_ids = [rid for rid in maybe_ids if isinstance(rid, str)]
+
     tools = [t for t in T1_TOOLS if f"{t}::{SUBTASK_T1}" in S]
 
     def _load_durations(tool: str) -> list[float]:
-        pattern = str(run_base / tool / "T1_T2" / "popular" / "*" / "metrics.json")
         durations: list[float] = []
-        for path in glob.glob(pattern):
-            with open(path) as fh:
-                m = json.load(fh)
-            if m.get("success"):
-                durations.append(m["duration_seconds"])
+        for rid in run_ids:
+            run_base = RESULTS_DIR / rid
+            pattern = str(run_base / tool / "T1_T2" / "popular" / "*" / "metrics.json")
+            for path in glob.glob(pattern):
+                with open(path) as fh:
+                    m = json.load(fh)
+                if m.get("success"):
+                    durations.append(m["duration_seconds"])
         return sorted(durations)
 
     dur_data   = {t: _load_durations(t) for t in tools}
@@ -320,14 +343,19 @@ def _fig4a_t3_discovery_full(S: dict, out: Path) -> None:
 
 
 def _fig4b_t3_discovery_py(S: dict, out: Path) -> None:
-    """Figure 4b — T3: F1 / precision / recall (python-literal scope)."""
-    tools  = [t for t in T3_TOOLS if f"{t}::{SUBTASK_T3}" in S]
-    labels = [TOOL_LABELS[t] for t in tools]
+    """Figure 4b — T3: python-scope metrics with joris python-only comparator."""
+    primary_tools = [t for t in T3_TOOLS if f"{t}::{SUBTASK_T3}" in S]
+    python_only_tools = [t for t in T3_APPENDIX_TOOLS if f"{t}::{SUBTASK_T3}" in S]
+    tools = primary_tools + python_only_tools
+    if not tools:
+        return
+
+    labels = [TOOL_LABELS[t] + ("*" if t in python_only_tools else "") for t in tools]
     colors = [PALETTE[t] for t in tools]
 
-    f1_py   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1_py"]["mean"]        for t in tools]
+    f1_py   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1_py"]["mean"] for t in tools]
     prec_py = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["precision_py"]["mean"] for t in tools]
-    rec_py  = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall_py"]["mean"]    for t in tools]
+    rec_py  = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall_py"]["mean"] for t in tools]
 
     x3 = np.arange(len(tools))
     w3 = 0.25
@@ -341,39 +369,46 @@ def _fig4b_t3_discovery_py(S: dict, out: Path) -> None:
     ax.set_xticklabels(labels, rotation=18, ha="right")
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Score")
-    ax.set_title("Python-literal scope (fair subset)")
+    ax.set_title("Python scope (primary + python-only comparator)")
+    if python_only_tools and primary_tools:
+        split_x = len(primary_tools) - 0.5
+        ax.axvline(split_x, color="grey", linestyle=":", linewidth=1)
+        ax.text(split_x + 0.05, 1.01, "Python-only", fontsize=7.5, color="dimgrey")
+
     metric_patches = [mpatches.Patch(facecolor="grey", label="F1"),
                       mpatches.Patch(facecolor="grey", hatch="//", label="Precision"),
                       mpatches.Patch(facecolor="grey", hatch="xx", label="Recall")]
-    ax.legend(handles=metric_patches, frameon=False, fontsize=8)
+    legend_text = "* Python-only tool"
+    ax.legend(handles=metric_patches, frameon=False, fontsize=8, title=legend_text)
     fig.tight_layout()
     fig.savefig(out / "fig4b_t3_discovery_py.pdf", bbox_inches="tight")
     plt.close(fig)
     click.echo("  Saved fig4b_t3_discovery_py.pdf")
 
 
-def _fig5a_t4_conformance(S: dict, out: Path) -> None:
-    """Figure 5a — T4: CycloneDX conformance rate."""
-    all_t4_tools = T4G1_TOOLS + [t for t in T4G2_TOOLS if t not in T4G1_TOOLS]
-    tools: list[str] = []
-    subtasks: list[str] = []
-    for t in all_t4_tools:
-        if f"{t}::{SUBTASK_T4G1}" in S:
-            tools.append(t); subtasks.append(SUBTASK_T4G1)
-        elif f"{t}::{SUBTASK_T4G2}" in S:
-            tools.append(t); subtasks.append(SUBTASK_T4G2)
+def _fig5a_t4_conformance_group(
+    S: dict,
+    out: Path,
+    subtask: str,
+    tool_group: list[str],
+    suffix: str,
+) -> None:
+    """Figure 5a — T4 conformance for one group (G1 or G2)."""
+    tools = [t for t in tool_group if f"{t}::{subtask}" in S]
+    if not tools:
+        return
 
     labels = [TOOL_LABELS[t] for t in tools]
     colors = [PALETTE[t] for t in tools]
     x = np.arange(len(tools))
     w2 = 0.35
 
-    def _metric(t: str, st: str, key: str) -> float:
-        val = S[f"{t}::{st}"]["metrics"][key]
+    def _metric(t: str, key: str) -> float:
+        val = S[f"{t}::{subtask}"]["metrics"][key]
         return val["mean"] if isinstance(val, dict) else float(val)
 
-    conform_v16 = [_metric(t, st, "cdx_conformance_pass_rate_v16") for t, st in zip(tools, subtasks)]
-    conform_v17 = [_metric(t, st, "cdx_conformance_pass_rate_v17") for t, st in zip(tools, subtasks)]
+    conform_v16 = [_metric(t, "cdx_conformance_pass_rate_v16") for t in tools]
+    conform_v17 = [_metric(t, "cdx_conformance_pass_rate_v17") for t in tools]
 
     fig, ax = plt.subplots(figsize=(5.5, 3.8))
     ax.bar(x - w2 / 2, conform_v16, width=w2, color=colors, edgecolor="white")
@@ -383,40 +418,42 @@ def _fig5a_t4_conformance(S: dict, out: Path) -> None:
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylim(0, 1.15)
     ax.set_ylabel("Conformance pass rate")
-    ax.set_title("CycloneDX Conformance")
+    ax.set_title(f"CycloneDX Conformance ({subtask})")
     v16_patch = mpatches.Patch(facecolor="grey", label="v1.6")
     v17_patch = mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="v1.7")
     ax.legend(handles=[v16_patch, v17_patch], frameon=False, fontsize=8)
     fig.tight_layout()
-    fig.savefig(out / "fig5a_t4_conformance.pdf", bbox_inches="tight")
+    out_name = f"fig5a_t4_conformance_{suffix}.pdf"
+    fig.savefig(out / out_name, bbox_inches="tight")
     plt.close(fig)
-    click.echo("  Saved fig5a_t4_conformance.pdf")
+    click.echo(f"  Saved {out_name}")
 
 
-def _fig5b_t4_completeness(S: dict, out: Path) -> None:
-    """Figure 5b — T4: CycloneDX completeness & breadth."""
-    all_t4_tools = T4G1_TOOLS + [t for t in T4G2_TOOLS if t not in T4G1_TOOLS]
-    tools: list[str] = []
-    subtasks: list[str] = []
-    for t in all_t4_tools:
-        if f"{t}::{SUBTASK_T4G1}" in S:
-            tools.append(t); subtasks.append(SUBTASK_T4G1)
-        elif f"{t}::{SUBTASK_T4G2}" in S:
-            tools.append(t); subtasks.append(SUBTASK_T4G2)
+def _fig5b_t4_completeness_group(
+    S: dict,
+    out: Path,
+    subtask: str,
+    tool_group: list[str],
+    suffix: str,
+) -> None:
+    """Figure 5b — T4 completeness/breadth for one group (G1 or G2)."""
+    tools = [t for t in tool_group if f"{t}::{subtask}" in S]
+    if not tools:
+        return
 
     labels = [TOOL_LABELS[t] for t in tools]
     colors = [PALETTE[t] for t in tools]
     x = np.arange(len(tools))
     w4 = 0.18
 
-    def _metric(t: str, st: str, key: str) -> float:
-        val = S[f"{t}::{st}"]["metrics"][key]
+    def _metric(t: str, key: str) -> float:
+        val = S[f"{t}::{subtask}"]["metrics"][key]
         return val["mean"] if isinstance(val, dict) else float(val)
 
-    complt_v16  = [_metric(t, st, "cdx_completeness_pct_v16") for t, st in zip(tools, subtasks)]
-    complt_v17  = [_metric(t, st, "cdx_completeness_pct_v17") for t, st in zip(tools, subtasks)]
-    breadth_v16 = [_metric(t, st, "cdx_breadth_pct_v16")      for t, st in zip(tools, subtasks)]
-    breadth_v17 = [_metric(t, st, "cdx_breadth_pct_v17")      for t, st in zip(tools, subtasks)]
+    complt_v16  = [_metric(t, "cdx_completeness_pct_v16") for t in tools]
+    complt_v17  = [_metric(t, "cdx_completeness_pct_v17") for t in tools]
+    breadth_v16 = [_metric(t, "cdx_breadth_pct_v16")      for t in tools]
+    breadth_v17 = [_metric(t, "cdx_breadth_pct_v17")      for t in tools]
 
     bar_groups = [
         (complt_v16,  "Completeness v1.6", {}),
@@ -432,7 +469,7 @@ def _fig5b_t4_completeness(S: dict, out: Path) -> None:
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.set_ylabel("Coverage score (\u00d7100 = %)")
-    ax.set_title("Completeness & Breadth")
+    ax.set_title(f"Completeness & Breadth ({subtask})")
     patches = [
         mpatches.Patch(facecolor="grey",                        label="Completeness v1.6"),
         mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="Completeness v1.7"),
@@ -441,6 +478,7 @@ def _fig5b_t4_completeness(S: dict, out: Path) -> None:
     ]
     ax.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper right")
     fig.tight_layout()
-    fig.savefig(out / "fig5b_t4_completeness.pdf", bbox_inches="tight")
+    out_name = f"fig5b_t4_completeness_{suffix}.pdf"
+    fig.savefig(out / out_name, bbox_inches="tight")
     plt.close(fig)
-    click.echo("  Saved fig5b_t4_completeness.pdf")
+    click.echo(f"  Saved {out_name}")

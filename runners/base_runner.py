@@ -154,6 +154,7 @@ class BaseRunner(abc.ABC):
         input_spec: str,
         dataset_id: str,
         results_dir: Path,
+        repeat_index: int = 1,
         hf_token: str | None = None,
         max_retries: int | None = None,
         timeout: int | None = None,
@@ -168,7 +169,7 @@ class BaseRunner(abc.ABC):
             timeout = self.tool_config.get("timeout_seconds", self.TIMEOUT)
 
         # Per-input output directory to prevent collisions across model IDs.
-        # Layout: results/runs/<run_id>/<tool>/<task>/<dataset>/<input_slug>/
+        # Layout: results/runs/<run_id>/<tool>/<task>/<dataset>/<input_slug>/rNN/
         output_dir = (
             results_dir
             / run_id
@@ -176,6 +177,7 @@ class BaseRunner(abc.ABC):
             / self.task_config["id"]
             / dataset_id
             / input_slug(input_spec)
+            / f"r{repeat_index:02d}"
         )
         output_dir.mkdir(parents=True, exist_ok=True)
 

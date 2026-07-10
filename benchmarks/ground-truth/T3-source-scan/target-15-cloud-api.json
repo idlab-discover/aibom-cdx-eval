@@ -1,8 +1,8 @@
 {
-  "_comment": "Ground truth for target-17 (synthetic). Hybrid RAG pipeline: local HuggingFace embeddings + cloud LLM generation. Tests tools that span both HF-transformers patterns (from_pretrained, SentenceTransformer) AND cloud-API patterns (ChatOpenAI, ChatAnthropic). aibomgen-cli detects only the python_literal HF models; akumar-aibom detects only the python_literal cloud-API models; jorisbot-aibom and trusera-aibom should detect both.",
-  "_method": "Manual annotation from target-17/chain.py.",
-  "target": "target-17",
-  "target_path": "targets/target-17",
+  "_comment": "Ground truth for target-17-cloud-api (synthetic). Hybrid RAG pipeline: local HuggingFace embeddings + cloud LLM generation. Tests tools that span both HF-transformers patterns (from_pretrained, SentenceTransformer) AND cloud-API patterns (ChatOpenAI, ChatAnthropic). aibomgen-cli detects only the python_literal HF models; akumar-aibom detects only the python_literal cloud-API models; jorisbot-aibom and trusera-aibom should detect both.",
+  "_method": "Manual annotation from target-17-cloud-api/chain.py.",
+  "target": "target-17-cloud-api",
+  "target_path": "targets/target-17-cloud-api",
   "models": [
     {
       "id": "BAAI/bge-small-en-v1.5",

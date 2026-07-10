@@ -1,5 +1,5 @@
 """
-checkpoint.py — tracks (tool, task, dataset, input_spec) completion state.
+checkpoint.py — tracks (tool, task, dataset, input_spec, repeat_index) completion state.
 
 The checkpoint is a JSON file at results/runs/<run-id>/checkpoint.json.
 Each key is a job signature; value is {"status": "done"|"failed", "ts": ISO8601}.
@@ -34,18 +34,37 @@ class Checkpoint:
             json.dump(self._data, f, indent=2)
 
     @staticmethod
-    def _key(tool: str, task: str, dataset: str, input_spec: str) -> str:
+    def _key(
+        tool: str,
+        task: str,
+        dataset: str,
+        input_spec: str,
+        repeat_index: int = 1,
+    ) -> str:
         # Use a compact delimiter that won't appear in typical IDs
-        return CHECKPOINT_DELIMITER.join([tool, task, dataset, input_spec])
+        return CHECKPOINT_DELIMITER.join([tool, task, dataset, input_spec, f"r{repeat_index}"])
 
-    def is_done(self, tool: str, task: str, dataset: str, input_spec: str) -> bool:
-        key = self._key(tool, task, dataset, input_spec)
+    def is_done(
+        self,
+        tool: str,
+        task: str,
+        dataset: str,
+        input_spec: str,
+        repeat_index: int = 1,
+    ) -> bool:
+        key = self._key(tool, task, dataset, input_spec, repeat_index)
         return self._data.get(key, {}).get("status") == "done"
 
     def mark_done(
-        self, tool: str, task: str, dataset: str, input_spec: str, status: str = "done"
+        self,
+        tool: str,
+        task: str,
+        dataset: str,
+        input_spec: str,
+        status: str = "done",
+        repeat_index: int = 1,
     ) -> None:
-        key = self._key(tool, task, dataset, input_spec)
+        key = self._key(tool, task, dataset, input_spec, repeat_index)
         self._data[key] = {
             "status": status,
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
