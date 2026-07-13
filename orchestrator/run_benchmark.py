@@ -8,7 +8,7 @@ Subcommands:
 
 Quick start:
   uv run eval run --run-id my-run-001
-    uv run eval run --run-id my-run-001 --n 3
+        uv run eval run --run-id my-run-001 --repeats 3
     uv run eval run --run-id my-run-001 --background
   uv run eval status --run-id my-run-001
   uv run eval aggregate --run-id my-run-001
@@ -94,7 +94,15 @@ def cli() -> None:
     type=float,
     help="Minutes to wait between tool/task groups (default: 5.0).",
 )
-@click.option("--n", default=1, show_default=True, type=int, help="Repeat count for shared T1_T2 jobs.")
+@click.option(
+    "--repeats",
+    "n",
+    "--n",
+    default=1,
+    show_default=True,
+    type=int,
+    help="Repeat count for shared T1_T2 jobs.",
+)
 @click.option(
     "--background",
     is_flag=True,
@@ -114,7 +122,7 @@ def run(
 ) -> None:
     """Run all jobs on the current machine (sequential)."""
     if n < 1:
-        click.echo("--n must be >= 1.", err=True)
+        click.echo("--repeats/--n must be >= 1.", err=True)
         sys.exit(1)
 
     cfg = _load_config()

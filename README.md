@@ -80,7 +80,7 @@ uv run eval run
 uv run eval run --run-id eval-007
 
 # Repeat T1_T2 jobs under the same run-id (for variance studies)
-uv run eval run --run-id eval-007 --n 3
+uv run eval run --run-id eval-007 --repeats 3
 
 # Targeted run filters
 uv run eval run --tasks T1_T2 --tools aibomgen-cli,aibom-generator
@@ -102,6 +102,12 @@ uv run eval aggregate --run-id eval-007
 # Outputs:
 #   results/aggregated/eval-007_summary.json
 #   results/aggregated/figures/eval-007/
+#     fig2_t1_boxplot.pdf
+#     fig4a_t3_discovery_full.pdf
+#     fig4b_t3_discovery_py.pdf
+#     fig4c_t3_discovery_mixed.pdf
+#     fig4d_t3_discovery_config.pdf
+#     fig4e_t3_discovery_cloud_api.pdf
 ```
 
 ---

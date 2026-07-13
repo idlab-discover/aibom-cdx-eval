@@ -23,11 +23,13 @@ from pathlib import Path
 from typing import Any
 
 import click
+import yaml
 
 from constants import (
     AGGREGATED_DIR,
     EC_CRASH,
     EC_SUCCESS,
+    CONFIG_PATH,
     EVAL_ROOT,
     GT_DIR,
     K_CDX_BREADTH_V16,
@@ -190,6 +192,8 @@ def _aggregate_discovery(
     for r in records:
         by_tool[r["tool"]].append(r)
 
+    dataset_scope_map = _load_t3_dataset_scope_map()
+
     for tool, recs in sorted(by_tool.items()):
         key = f"{tool}::{sub_task}"
         scores = [r.get("scores", {}) for r in recs]
@@ -217,6 +221,9 @@ def _aggregate_discovery(
         fp_py_total = sum(s.get("fp_py") or 0 for s in py_scores)
         fn_py_total = sum(s.get("fn_py") or 0 for s in py_scores)
 
+        # ── Dataset-scope metrics (python/mixed/config/cloud_api) ───────────
+        scope_metrics = _aggregate_scope_metrics(recs, dataset_scope_map)
+
         summary[key] = {
             "tool":         tool,
             "sub_task":     sub_task,
@@ -234,6 +241,7 @@ def _aggregate_discovery(
                 "tp_py_total":        tp_py_total,
                 "fp_py_total":        fp_py_total,
                 "fn_py_total":        fn_py_total,
+                **scope_metrics,
             },
         }
 
@@ -290,6 +298,60 @@ def _compute_py_scores(record: dict) -> dict:
         "recall_py":    recall_py,
         "f1_py":        f1_py,
     }
+
+
+def _load_t3_dataset_scope_map() -> dict[str, str]:
+    """Resolve T3 dataset ID -> scope bucket from orchestrator config."""
+    try:
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+    task_cfg = cfg.get("tasks", {}).get(TASK_T3_T4G2, {})
+    datasets = task_cfg.get("datasets", [])
+    mapping: dict[str, str] = {}
+    for ds in datasets:
+        ds_id = ds.get("id")
+        scope = ds.get("scope_bucket")
+        if isinstance(ds_id, str) and isinstance(scope, str):
+            mapping[ds_id] = scope
+    return mapping
+
+
+def _aggregate_scope_metrics(
+    records: list[dict],
+    dataset_scope_map: dict[str, str],
+) -> dict[str, Any]:
+    """Aggregate discovery metrics by dataset scope bucket."""
+    scopes = ("python", "mixed", "config", "cloud_api")
+    out: dict[str, Any] = {}
+
+    for scope in scopes:
+        scoped_recs = [
+            r for r in records
+            if dataset_scope_map.get(r.get("dataset", "")) == scope
+        ]
+        scoped_scores = [r.get("scores", {}) for r in scoped_recs]
+
+        out[f"precision_scope_{scope}"] = _agg_metric(scoped_scores, K_PRECISION)
+        out[f"recall_scope_{scope}"] = _agg_metric(scoped_scores, K_RECALL)
+        out[f"f1_scope_{scope}"] = _agg_metric(scoped_scores, K_F1)
+
+        out[f"tp_scope_{scope}_total"] = sum(s.get("tp") or 0 for s in scoped_scores)
+        out[f"fp_scope_{scope}_total"] = sum(s.get("fp") or 0 for s in scoped_scores)
+        out[f"fn_scope_{scope}_total"] = sum(s.get("fn") or 0 for s in scoped_scores)
+
+        fp_vals = [float(s["fp"]) for s in scoped_scores if s.get("fp") is not None]
+        out[f"fp_per_target_scope_{scope}_mean"] = _mean(fp_vals)
+
+        zero_detect = sum(1 for s in scoped_scores if s.get("tp") == 0 and s.get("fp") == 0)
+        out[f"zero_detect_scope_{scope}_rate"] = (
+            round(zero_detect / max(len(scoped_recs), 1), 4) if scoped_recs else None
+        )
+        out[f"n_scope_{scope}"] = len(scoped_recs)
+
+    return out
 
 
 def _aggregate_reliability(

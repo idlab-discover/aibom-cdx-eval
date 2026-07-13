@@ -10,7 +10,10 @@ Figures:
   fig2_t1_boxplot.pdf         — T1 generation-time distribution (boxplot)
   fig3_t2_reliability.pdf     — T2 success rate bar
   fig4a_t3_discovery_full.pdf — T3 F1 / precision / recall (full scope)
-    fig4b_t3_discovery_py.pdf   — T3 F1 / precision / recall (python scope + joris python-only comparator)
+    fig4b_t3_discovery_py.pdf   — T3 F1 / precision / recall (python scope)
+    fig4c_t3_discovery_mixed.pdf — T3 F1 / precision / recall (mixed scope)
+    fig4d_t3_discovery_config.pdf — T3 F1 / precision / recall (config scope)
+    fig4e_t3_discovery_cloud_api.pdf — T3 F1 / precision / recall (cloud_api scope)
     fig5a_t4_conformance_g1.pdf — T4-G1 CycloneDX conformance
     fig5a_t4_conformance_g2.pdf — T4-G2 CycloneDX conformance
     fig5b_t4_completeness_g1.pdf — T4-G1 CycloneDX completeness & breadth
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import glob
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -89,7 +93,7 @@ TOOL_LABELS: dict[str, str] = {
 T1_TOOLS  = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T2_TOOLS  = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T3_TOOLS  = ["aibomgen-cli", "trusera-aibom", "akumar-aibom"]
-T3_APPENDIX_TOOLS = ["jorisbot-aibom"]
+T3_PY_TOOLS = ["aibomgen-cli", "trusera-aibom", "akumar-aibom", "jorisbot-aibom"]
 T4G1_TOOLS = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T4G2_TOOLS = ["aibomgen-cli", "akumar-aibom", "trusera-aibom"]
 
@@ -127,6 +131,9 @@ def main(run_id: str) -> None:
     _fig3_t2_reliability(S, out_dir)
     _fig4a_t3_discovery_full(S, out_dir)
     _fig4b_t3_discovery_py(S, out_dir)
+    _fig4c_t3_discovery_mixed(S, out_dir)
+    _fig4d_t3_discovery_config(S, out_dir)
+    _fig4e_t3_discovery_cloud_api(S, out_dir)
     _fig5a_t4_conformance_group(S, out_dir, SUBTASK_T4G1, T4G1_TOOLS, "g1")
     _fig5a_t4_conformance_group(S, out_dir, SUBTASK_T4G2, T4G2_TOOLS, "g2")
     _fig5b_t4_completeness_group(S, out_dir, SUBTASK_T4G1, T4G1_TOOLS, "g1")
@@ -200,20 +207,44 @@ def _fig2_t1_boxplot(
 
     tools = [t for t in T1_TOOLS if f"{t}::{SUBTASK_T1}" in S]
 
-    def _load_durations(tool: str) -> list[float]:
+    def _load_durations_and_repeats(tool: str) -> tuple[list[float], set[int]]:
         durations: list[float] = []
+        repeat_ids: set[int] = set()
         for rid in run_ids:
             run_base = RESULTS_DIR / rid
-            pattern = str(run_base / tool / "T1_T2" / "popular" / "*" / "metrics.json")
-            for path in glob.glob(pattern):
+            pattern = str(run_base / tool / "T1_T2" / "**" / "metrics.json")
+            for path in glob.glob(pattern, recursive=True):
+                repeat_dir = Path(path).parent.name
+                m_repeat = re.fullmatch(r"r(\d+)", repeat_dir)
+                if m_repeat:
+                    repeat_ids.add(int(m_repeat.group(1)))
                 with open(path) as fh:
                     m = json.load(fh)
-                if m.get("success"):
-                    durations.append(m["duration_seconds"])
-        return sorted(durations)
+                if m.get("task") != "T1_T2":
+                    continue
+                if not m.get("success"):
+                    continue
+                dur = m.get("duration_seconds")
+                if isinstance(dur, (int, float)):
+                    durations.append(float(dur))
+        return sorted(durations), repeat_ids
 
-    dur_data   = {t: _load_durations(t) for t in tools}
-    box_labels = [f"{TOOL_LABELS[t]}\n(n={len(dur_data[t])})" for t in tools]
+    tool_stats = {t: _load_durations_and_repeats(t) for t in tools}
+    dur_data = {t: stats[0] for t, stats in tool_stats.items()}
+    tools = [t for t in tools if dur_data.get(t)]
+    if not tools:
+        click.echo("  Skipped fig2_t1_boxplot.pdf (no successful T1 samples found)")
+        return
+
+    def _repeat_n(tool: str) -> int:
+        repeats = tool_stats.get(tool, ([], set()))[1]
+        return len(repeats) if repeats else 1
+
+    repeat_n = max((_repeat_n(t) for t in tools), default=1)
+    box_labels = [
+        f"{TOOL_LABELS[t]}\n(repeats={repeat_n}, N={len(dur_data[t])})"
+        for t in tools
+    ]
     box_colors = [PALETTE[t] for t in tools]
 
     fig, ax = plt.subplots(figsize=(6.5, 4.0))
@@ -242,21 +273,32 @@ def _fig2_t1_boxplot(
             zip(tools, bp["medians"], bp["means"]), start=1):
         med_val  = med_line.get_ydata()[0]
         mean_val = mean_marker.get_ydata()[0]
-        ax.text(i + 0.28, med_val,  f"med {med_val:.2f}s",
-                ha="left", va="center", fontsize=7.5, color="dimgrey")
-        ax.text(i + 0.28, mean_val, f"μ {mean_val:.2f}s",
-                ha="left", va="center", fontsize=7.5, color="black")
+
+        # Stagger labels if mean/median are visually too close on a log scale.
+        close_on_log_scale = abs(np.log10(mean_val) - np.log10(med_val)) < 0.08
+        if close_on_log_scale:
+            med_x, mean_x = i + 0.26, i + 0.33
+            med_y, mean_y = med_val * 0.92, mean_val * 1.08
+        else:
+            med_x = mean_x = i + 0.28
+            med_y, mean_y = med_val, mean_val
+
+        ax.text(med_x, med_y, f"med {med_val:.2f}s",
+            ha="left", va="center", fontsize=7.5, color="dimgrey")
+        ax.text(mean_x, mean_y, f"μ {mean_val:.2f}s",
+            ha="left", va="center", fontsize=7.5, color="black")
 
     ax.set_yscale("log")
     ax.set_ylabel("Generation time (s, log scale)")
-    ax.set_xticklabels(box_labels)
+    ax.set_xticklabels(box_labels, fontsize=7.5)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:g}s"))
 
     med_patch  = plt.Line2D([0], [0], color="black", linewidth=1.2, label="Median")
     mean_patch = plt.Line2D([0], [0], marker="x", color="w", markerfacecolor="black",
                             markeredgecolor="black", markersize=8, markeredgewidth=2,
                             label="Mean (μ)")
-    ax.legend(handles=[med_patch, mean_patch], frameon=False, fontsize=8, loc="upper left")
+    ax.legend(handles=[med_patch, mean_patch], frameon=False, fontsize=7.5, loc="upper left")
+    fig.text(0.99, 0.01, "N = models x repeats", ha="right", va="bottom", fontsize=7, color="dimgrey")
 
     fig.tight_layout()
     fig.savefig(out / "fig2_t1_boxplot.pdf", bbox_inches="tight")
@@ -308,82 +350,143 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
 
 def _fig4a_t3_discovery_full(S: dict, out: Path) -> None:
     """Figure 4a — T3: F1 / precision / recall (full scope)."""
-    tools  = [t for t in T3_TOOLS if f"{t}::{SUBTASK_T3}" in S]
-    labels = [TOOL_LABELS[t] for t in tools]
-    colors = [PALETTE[t] for t in tools]
-
-    f1_full   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1"]["mean"]       for t in tools]
-    prec_full = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["precision"]["mean"] for t in tools]
-    rec_full  = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall"]["mean"]    for t in tools]
-
-    x3 = np.arange(len(tools))
-    w3 = 0.25
-
-    fig, ax = plt.subplots(figsize=(5.0, 3.6))
-    offsets = np.linspace(-w3, w3, 3)
-    for offset, (vals, hatch) in zip(offsets, [(f1_full, None), (prec_full, "//"), (rec_full, "xx")]):
-        ax.bar(x3 + offset, vals, width=w3, color=colors, edgecolor="white",
-               hatch=hatch, alpha=0.9 if hatch else 1.0)
-    ax.set_xticks(x3)
-    ax.set_xticklabels(labels, rotation=18, ha="right")
-    ax.set_ylim(0, 1.05)
-    ax.set_ylabel("Score")
-    ax.set_title("Full scope (all file types)")
-    tool_patches = [mpatches.Patch(color=PALETTE[t], label=TOOL_LABELS[t]) for t in tools]
-    ax.legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
-    metric_patches = [mpatches.Patch(facecolor="grey", label="F1"),
-                      mpatches.Patch(facecolor="grey", hatch="//", label="Precision"),
-                      mpatches.Patch(facecolor="grey", hatch="xx", label="Recall")]
-    ax.add_artist(ax.legend(handles=metric_patches, frameon=False, fontsize=8, loc="upper left"))
-    ax.legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
-    fig.tight_layout()
-    fig.savefig(out / "fig4a_t3_discovery_full.pdf", bbox_inches="tight")
-    plt.close(fig)
-    click.echo("  Saved fig4a_t3_discovery_full.pdf")
+    _fig4_t3_panel(
+        S,
+        out,
+        filename="fig4a_t3_discovery_full.pdf",
+        title="Full scope (all file types)",
+        tools=T3_TOOLS,
+        f1_key="f1",
+        precision_key="precision",
+        recall_key="recall",
+    )
 
 
 def _fig4b_t3_discovery_py(S: dict, out: Path) -> None:
-    """Figure 4b — T3: python-scope metrics with joris python-only comparator."""
-    primary_tools = [t for t in T3_TOOLS if f"{t}::{SUBTASK_T3}" in S]
-    python_only_tools = [t for t in T3_APPENDIX_TOOLS if f"{t}::{SUBTASK_T3}" in S]
-    tools = primary_tools + python_only_tools
-    if not tools:
+    """Figure 4b — T3: python-scope metrics."""
+    _fig4_t3_panel(
+        S,
+        out,
+        filename="fig4b_t3_discovery_py.pdf",
+        title="Python scope",
+        tools=T3_PY_TOOLS,
+        f1_key="f1_py",
+        precision_key="precision_py",
+        recall_key="recall_py",
+    )
+
+
+def _fig4c_t3_discovery_mixed(S: dict, out: Path) -> None:
+    """Figure 4c — T3: mixed-scope metrics."""
+    _fig4_t3_panel(
+        S,
+        out,
+        filename="fig4c_t3_discovery_mixed.pdf",
+        title="Mixed scope",
+        tools=T3_TOOLS,
+        f1_key="f1_scope_mixed",
+        precision_key="precision_scope_mixed",
+        recall_key="recall_scope_mixed",
+    )
+
+
+def _fig4d_t3_discovery_config(S: dict, out: Path) -> None:
+    """Figure 4d — T3: config-scope metrics."""
+    _fig4_t3_panel(
+        S,
+        out,
+        filename="fig4d_t3_discovery_config.pdf",
+        title="Config scope",
+        tools=T3_TOOLS,
+        f1_key="f1_scope_config",
+        precision_key="precision_scope_config",
+        recall_key="recall_scope_config",
+    )
+
+
+def _fig4e_t3_discovery_cloud_api(S: dict, out: Path) -> None:
+    """Figure 4e — T3: cloud_api-scope metrics."""
+    _fig4_t3_panel(
+        S,
+        out,
+        filename="fig4e_t3_discovery_cloud_api.pdf",
+        title="Cloud API scope",
+        tools=T3_TOOLS,
+        f1_key="f1_scope_cloud_api",
+        precision_key="precision_scope_cloud_api",
+        recall_key="recall_scope_cloud_api",
+    )
+
+
+def _fig4_t3_panel(
+    S: dict,
+    out: Path,
+    filename: str,
+    title: str,
+    tools: list[str],
+    f1_key: str,
+    precision_key: str,
+    recall_key: str,
+) -> None:
+    """Render a T3 panel with F1/precision/recall for one metric key set."""
+
+    def _metric_mean(tool: str, key: str) -> float | None:
+        entry = S.get(f"{tool}::{SUBTASK_T3}", {})
+        metric = entry.get("metrics", {}).get(key)
+        if isinstance(metric, dict):
+            value = metric.get("mean")
+            return float(value) if isinstance(value, (int, float)) else None
+        if isinstance(metric, (int, float)):
+            return float(metric)
+        return None
+
+    panel_tools = [t for t in tools if _metric_mean(t, f1_key) is not None]
+    if not panel_tools:
+        click.echo(f"  Skipped {filename} (no data)")
         return
 
-    labels = [TOOL_LABELS[t] + ("*" if t in python_only_tools else "") for t in tools]
-    colors = [PALETTE[t] for t in tools]
+    labels = [TOOL_LABELS[t] for t in panel_tools]
+    colors = [PALETTE[t] for t in panel_tools]
 
-    f1_py   = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["f1_py"]["mean"] for t in tools]
-    prec_py = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["precision_py"]["mean"] for t in tools]
-    rec_py  = [S[f"{t}::{SUBTASK_T3}"]["metrics"]["recall_py"]["mean"] for t in tools]
+    f1_vals = [_metric_mean(t, f1_key) or 0.0 for t in panel_tools]
+    prec_vals = [_metric_mean(t, precision_key) or 0.0 for t in panel_tools]
+    rec_vals = [_metric_mean(t, recall_key) or 0.0 for t in panel_tools]
 
-    x3 = np.arange(len(tools))
+    x3 = np.arange(len(panel_tools))
     w3 = 0.25
 
     fig, ax = plt.subplots(figsize=(5.0, 3.6))
     offsets = np.linspace(-w3, w3, 3)
-    for offset, (vals, hatch) in zip(offsets, [(f1_py, None), (prec_py, "//"), (rec_py, "xx")]):
-        ax.bar(x3 + offset, vals, width=w3, color=colors, edgecolor="white",
-               hatch=hatch, alpha=0.9 if hatch else 1.0)
+    for offset, (vals, hatch) in zip(offsets, [(f1_vals, None), (prec_vals, "//"), (rec_vals, "xx")]):
+        ax.bar(
+            x3 + offset,
+            vals,
+            width=w3,
+            color=colors,
+            edgecolor="white",
+            hatch=hatch,
+            alpha=0.9 if hatch else 1.0,
+        )
+
     ax.set_xticks(x3)
     ax.set_xticklabels(labels, rotation=18, ha="right")
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Score")
-    ax.set_title("Python scope (primary + python-only comparator)")
-    if python_only_tools and primary_tools:
-        split_x = len(primary_tools) - 0.5
-        ax.axvline(split_x, color="grey", linestyle=":", linewidth=1)
-        ax.text(split_x + 0.05, 1.01, "Python-only", fontsize=7.5, color="dimgrey")
+    ax.set_title(title)
 
-    metric_patches = [mpatches.Patch(facecolor="grey", label="F1"),
-                      mpatches.Patch(facecolor="grey", hatch="//", label="Precision"),
-                      mpatches.Patch(facecolor="grey", hatch="xx", label="Recall")]
-    legend_text = "* Python-only tool"
-    ax.legend(handles=metric_patches, frameon=False, fontsize=8, title=legend_text)
+    tool_patches = [mpatches.Patch(color=PALETTE[t], label=TOOL_LABELS[t]) for t in panel_tools]
+    metric_patches = [
+        mpatches.Patch(facecolor="grey", label="F1"),
+        mpatches.Patch(facecolor="grey", hatch="//", label="Precision"),
+        mpatches.Patch(facecolor="grey", hatch="xx", label="Recall"),
+    ]
+    ax.add_artist(ax.legend(handles=metric_patches, frameon=False, fontsize=8, loc="upper left"))
+    ax.legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
+
     fig.tight_layout()
-    fig.savefig(out / "fig4b_t3_discovery_py.pdf", bbox_inches="tight")
+    fig.savefig(out / filename, bbox_inches="tight")
     plt.close(fig)
-    click.echo("  Saved fig4b_t3_discovery_py.pdf")
+    click.echo(f"  Saved {filename}")
 
 
 def _fig5a_t4_conformance_group(
