@@ -14,10 +14,8 @@ Figures:
     fig4c_t3_discovery_mixed.pdf — T3 F1 / precision / recall (mixed scope)
     fig4d_t3_discovery_config.pdf — T3 F1 / precision / recall (config scope)
     fig4e_t3_discovery_cloud_api.pdf — T3 F1 / precision / recall (cloud_api scope)
-    fig5a_t4_conformance_g1.pdf — T4-G1 CycloneDX conformance
-    fig5a_t4_conformance_g2.pdf — T4-G2 CycloneDX conformance
-    fig5b_t4_completeness_g1.pdf — T4-G1 CycloneDX completeness & breadth
-    fig5b_t4_completeness_g2.pdf — T4-G2 CycloneDX completeness & breadth
+    fig5a_t4_conformance.pdf — T4 CycloneDX conformance (G1 + G2)
+    fig5b_t4_completeness.pdf — T4 CycloneDX completeness & breadth (G1 + G2)
 
 Usage:
     python -m analysis.graphs --run-id <run-id>
@@ -134,10 +132,8 @@ def main(run_id: str) -> None:
     _fig4c_t3_discovery_mixed(S, out_dir)
     _fig4d_t3_discovery_config(S, out_dir)
     _fig4e_t3_discovery_cloud_api(S, out_dir)
-    _fig5a_t4_conformance_group(S, out_dir, SUBTASK_T4G1, T4G1_TOOLS, "g1")
-    _fig5a_t4_conformance_group(S, out_dir, SUBTASK_T4G2, T4G2_TOOLS, "g2")
-    _fig5b_t4_completeness_group(S, out_dir, SUBTASK_T4G1, T4G1_TOOLS, "g1")
-    _fig5b_t4_completeness_group(S, out_dir, SUBTASK_T4G2, T4G2_TOOLS, "g2")
+    _fig5a_t4_conformance(S, out_dir)
+    _fig5b_t4_completeness(S, out_dir)
 
     click.echo(f"Figures written to: {out_dir}")
 
@@ -489,99 +485,112 @@ def _fig4_t3_panel(
     click.echo(f"  Saved {filename}")
 
 
-def _fig5a_t4_conformance_group(
-    S: dict,
-    out: Path,
-    subtask: str,
-    tool_group: list[str],
-    suffix: str,
-) -> None:
-    """Figure 5a — T4 conformance for one group (G1 or G2)."""
-    tools = [t for t in tool_group if f"{t}::{subtask}" in S]
-    if not tools:
+def _fig5a_t4_conformance(S: dict, out: Path) -> None:
+    """Figure 5a — T4 conformance side-by-side panels for G1 and G2."""
+
+    def _panel(ax: Any, subtask: str, tool_group: list[str], title: str, show_ylabel: bool) -> bool:
+        tools = [t for t in tool_group if f"{t}::{subtask}" in S]
+        if not tools:
+            return False
+
+        labels = [TOOL_LABELS[t] for t in tools]
+        colors = [PALETTE[t] for t in tools]
+        x = np.arange(len(tools))
+        w2 = 0.35
+
+        def _metric(t: str, key: str) -> float:
+            val = S[f"{t}::{subtask}"]["metrics"][key]
+            return val["mean"] if isinstance(val, dict) else float(val)
+
+        conform_v16 = [_metric(t, "cdx_conformance_pass_rate_v16") for t in tools]
+        conform_v17 = [_metric(t, "cdx_conformance_pass_rate_v17") for t in tools]
+
+        ax.bar(x - w2 / 2, conform_v16, width=w2, color=colors, edgecolor="white")
+        ax.bar(x + w2 / 2, conform_v17, width=w2, color=colors, edgecolor="white", hatch="//", alpha=0.7)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=20, ha="right")
+        ax.set_ylim(0, 1.15)
+        if show_ylabel:
+            ax.set_ylabel("Conformance pass rate")
+        ax.set_title(title)
+        return True
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 3.8), sharey=True)
+    has_g1 = _panel(axes[0], SUBTASK_T4G1, T4G1_TOOLS, "G1", True)
+    has_g2 = _panel(axes[1], SUBTASK_T4G2, T4G2_TOOLS, "G2", False)
+
+    if not has_g1 and not has_g2:
+        plt.close(fig)
+        click.echo("  Skipped fig5a_t4_conformance.pdf (no data)")
         return
 
-    labels = [TOOL_LABELS[t] for t in tools]
-    colors = [PALETTE[t] for t in tools]
-    x = np.arange(len(tools))
-    w2 = 0.35
-
-    def _metric(t: str, key: str) -> float:
-        val = S[f"{t}::{subtask}"]["metrics"][key]
-        return val["mean"] if isinstance(val, dict) else float(val)
-
-    conform_v16 = [_metric(t, "cdx_conformance_pass_rate_v16") for t in tools]
-    conform_v17 = [_metric(t, "cdx_conformance_pass_rate_v17") for t in tools]
-
-    fig, ax = plt.subplots(figsize=(5.5, 3.8))
-    ax.bar(x - w2 / 2, conform_v16, width=w2, color=colors, edgecolor="white")
-    ax.bar(x + w2 / 2, conform_v17, width=w2, color=colors, edgecolor="white",
-           hatch="//", alpha=0.7)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_ylim(0, 1.15)
-    ax.set_ylabel("Conformance pass rate")
-    ax.set_title(f"CycloneDX Conformance ({subtask})")
     v16_patch = mpatches.Patch(facecolor="grey", label="v1.6")
     v17_patch = mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="v1.7")
-    ax.legend(handles=[v16_patch, v17_patch], frameon=False, fontsize=8)
-    fig.tight_layout()
-    out_name = f"fig5a_t4_conformance_{suffix}.pdf"
+    fig.legend(handles=[v16_patch, v17_patch], frameon=False, fontsize=8, loc="upper center", ncol=2)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    out_name = "fig5a_t4_conformance.pdf"
     fig.savefig(out / out_name, bbox_inches="tight")
     plt.close(fig)
     click.echo(f"  Saved {out_name}")
 
 
-def _fig5b_t4_completeness_group(
-    S: dict,
-    out: Path,
-    subtask: str,
-    tool_group: list[str],
-    suffix: str,
-) -> None:
-    """Figure 5b — T4 completeness/breadth for one group (G1 or G2)."""
-    tools = [t for t in tool_group if f"{t}::{subtask}" in S]
-    if not tools:
+def _fig5b_t4_completeness(S: dict, out: Path) -> None:
+    """Figure 5b — T4 completeness/breadth side-by-side panels for G1 and G2."""
+
+    def _panel(ax: Any, subtask: str, tool_group: list[str], title: str, show_ylabel: bool) -> bool:
+        tools = [t for t in tool_group if f"{t}::{subtask}" in S]
+        if not tools:
+            return False
+
+        labels = [TOOL_LABELS[t] for t in tools]
+        colors = [PALETTE[t] for t in tools]
+        x = np.arange(len(tools))
+        w4 = 0.18
+
+        def _metric(t: str, key: str) -> float:
+            val = S[f"{t}::{subtask}"]["metrics"][key]
+            return val["mean"] if isinstance(val, dict) else float(val)
+
+        complt_v16 = [_metric(t, "cdx_completeness_pct_v16") for t in tools]
+        complt_v17 = [_metric(t, "cdx_completeness_pct_v17") for t in tools]
+        breadth_v16 = [_metric(t, "cdx_breadth_pct_v16") for t in tools]
+        breadth_v17 = [_metric(t, "cdx_breadth_pct_v17") for t in tools]
+
+        bar_groups = [
+            (complt_v16, {}),
+            (complt_v17, {"hatch": "//", "alpha": 0.7}),
+            (breadth_v16, {"hatch": "xx"}),
+            (breadth_v17, {"hatch": "xx", "alpha": 0.7}),
+        ]
+        offsets = [-1.5 * w4, -0.5 * w4, 0.5 * w4, 1.5 * w4]
+
+        for offset, (vals, kwargs) in zip(offsets, bar_groups):
+            ax.bar(x + offset, vals, width=w4, color=colors, edgecolor="white", **kwargs)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=20, ha="right")
+        if show_ylabel:
+            ax.set_ylabel("Coverage score (\u00d7100 = %)")
+        ax.set_title(title)
+        return True
+
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 3.8), sharey=True)
+    has_g1 = _panel(axes[0], SUBTASK_T4G1, T4G1_TOOLS, "G1", True)
+    has_g2 = _panel(axes[1], SUBTASK_T4G2, T4G2_TOOLS, "G2", False)
+
+    if not has_g1 and not has_g2:
+        plt.close(fig)
+        click.echo("  Skipped fig5b_t4_completeness.pdf (no data)")
         return
 
-    labels = [TOOL_LABELS[t] for t in tools]
-    colors = [PALETTE[t] for t in tools]
-    x = np.arange(len(tools))
-    w4 = 0.18
-
-    def _metric(t: str, key: str) -> float:
-        val = S[f"{t}::{subtask}"]["metrics"][key]
-        return val["mean"] if isinstance(val, dict) else float(val)
-
-    complt_v16  = [_metric(t, "cdx_completeness_pct_v16") for t in tools]
-    complt_v17  = [_metric(t, "cdx_completeness_pct_v17") for t in tools]
-    breadth_v16 = [_metric(t, "cdx_breadth_pct_v16")      for t in tools]
-    breadth_v17 = [_metric(t, "cdx_breadth_pct_v17")      for t in tools]
-
-    bar_groups = [
-        (complt_v16,  "Completeness v1.6", {}),
-        (complt_v17,  "Completeness v1.7", {"hatch": "//", "alpha": 0.7}),
-        (breadth_v16, "Breadth v1.6",      {"hatch": "xx"}),
-        (breadth_v17, "Breadth v1.7",      {"hatch": "xx", "alpha": 0.7}),
-    ]
-    offsets = [-1.5 * w4, -0.5 * w4, 0.5 * w4, 1.5 * w4]
-
-    fig, ax = plt.subplots(figsize=(6.5, 3.8))
-    for offset, (vals, _label, kwargs) in zip(offsets, bar_groups):
-        ax.bar(x + offset, vals, width=w4, color=colors, edgecolor="white", **kwargs)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=20, ha="right")
-    ax.set_ylabel("Coverage score (\u00d7100 = %)")
-    ax.set_title(f"Completeness & Breadth ({subtask})")
     patches = [
-        mpatches.Patch(facecolor="grey",                        label="Completeness v1.6"),
+        mpatches.Patch(facecolor="grey", label="Completeness v1.6"),
         mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="Completeness v1.7"),
-        mpatches.Patch(facecolor="grey", hatch="xx",            label="Breadth v1.6"),
+        mpatches.Patch(facecolor="grey", hatch="xx", label="Breadth v1.6"),
         mpatches.Patch(facecolor="grey", hatch="xx", alpha=0.7, label="Breadth v1.7"),
     ]
-    ax.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper right")
-    fig.tight_layout()
-    out_name = f"fig5b_t4_completeness_{suffix}.pdf"
+    fig.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper center", ncol=4)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    out_name = "fig5b_t4_completeness.pdf"
     fig.savefig(out / out_name, bbox_inches="tight")
     plt.close(fig)
     click.echo(f"  Saved {out_name}")
