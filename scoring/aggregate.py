@@ -2,7 +2,7 @@
 aggregate.py — cross-tool, cross-task result aggregation.
 
 Reads all metrics.json files from a completed run and produces:
-  results/aggregated/<run-id>_summary.json  — per-tool per-sub-task summary stats
+    results/aggregated/data/<run-id>/<run-id>_summary.json  — per-tool per-sub-task summary stats
 
 Sub-tasks derived from raw task IDs:
   T1_T2   → split into T1 (performance) and T2 (reliability) sub-sections
@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+import csv
 import json
 import sys
 from collections import defaultdict
@@ -85,13 +86,14 @@ def main(run_id: str, results_dir: str) -> None:
 
     summary = _build_summary(records)
 
-    AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
-    summary_path = AGGREGATED_DIR / f"{run_id}_summary.json"
+    data_dir = _run_data_dir(run_id)
+    summary_path = data_dir / f"{run_id}_summary.json"
 
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
     click.echo(f"Summary → {summary_path}")
+    _write_t3_tables(run_id, summary)
 
 
 # ------------------------------------------------------------------ #
@@ -352,6 +354,129 @@ def _aggregate_scope_metrics(
         out[f"n_scope_{scope}"] = len(scoped_recs)
 
     return out
+
+
+def _write_t3_tables(run_id: str, summary: dict[str, Any]) -> None:
+    """Write canonical T3 full/python scope tables for paper/report reuse."""
+    AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
+
+    full_tools = ("aibomgen-cli", "trusera-aibom", "akumar-aibom")
+    py_tools = ("aibomgen-cli", "trusera-aibom", "akumar-aibom", "jorisbot-aibom")
+
+    full_rows = [_t3_row(summary, tool, scope="full") for tool in full_tools]
+    py_rows = [_t3_row(summary, tool, scope="python") for tool in py_tools]
+
+    full_rows = [r for r in full_rows if r is not None]
+    py_rows = [r for r in py_rows if r is not None]
+
+    _write_table_files(
+        run_id=run_id,
+        suffix="t3_full_scope",
+        rows=full_rows,
+        caption="T3 model discovery results on full scope",
+        scope="full",
+    )
+    _write_table_files(
+        run_id=run_id,
+        suffix="t3_python_scope",
+        rows=py_rows,
+        caption="T3 model discovery results on python scope",
+        scope="python",
+    )
+
+
+def _t3_row(summary: dict[str, Any], tool: str, scope: str) -> dict[str, Any] | None:
+    key = f"{tool}::{SUBTASK_T3}"
+    entry = summary.get(key)
+    if not isinstance(entry, dict):
+        return None
+
+    metrics = entry.get("metrics", {})
+    if scope == "full":
+        return {
+            "tool": tool,
+            "scope": "full",
+            "f1": _metric_mean(metrics, "f1"),
+            "precision": _metric_mean(metrics, "precision"),
+            "recall": _metric_mean(metrics, "recall"),
+            "tp": metrics.get("tp_total"),
+            "fp": metrics.get("fp_total"),
+            "fn": metrics.get("fn_total"),
+            "total_runs": entry.get("total_runs"),
+            "successful_runs": entry.get("successful"),
+            "metric_n": _metric_n(metrics, "f1"),
+        }
+
+    return {
+        "tool": tool,
+        "scope": "python",
+        "f1": _metric_mean(metrics, "f1_scope_python"),
+        "precision": _metric_mean(metrics, "precision_scope_python"),
+        "recall": _metric_mean(metrics, "recall_scope_python"),
+        "tp": metrics.get("tp_scope_python_total"),
+        "fp": metrics.get("fp_scope_python_total"),
+        "fn": metrics.get("fn_scope_python_total"),
+        "targets_in_scope": metrics.get("n_scope_python"),
+        "metric_n": _metric_n(metrics, "f1_scope_python"),
+    }
+
+
+def _metric_mean(metrics: dict[str, Any], key: str) -> float | None:
+    value = metrics.get(key)
+    if isinstance(value, dict):
+        mean = value.get("mean")
+        return float(mean) if isinstance(mean, (int, float)) else None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _metric_n(metrics: dict[str, Any], key: str) -> int | None:
+    value = metrics.get(key)
+    if isinstance(value, dict):
+        n = value.get("n")
+        return int(n) if isinstance(n, (int, float)) else None
+    return None
+
+
+def _write_table_files(
+    run_id: str,
+    suffix: str,
+    rows: list[dict[str, Any]],
+    caption: str,
+    scope: str,
+) -> None:
+    if not rows:
+        return
+
+    data_dir = _run_data_dir(run_id)
+    json_path = data_dir / f"{run_id}_{suffix}.json"
+    csv_path = data_dir / f"{run_id}_{suffix}.csv"
+
+    payload = {
+        "run_id": run_id,
+        "sub_task": SUBTASK_T3,
+        "scope": scope,
+        "caption": caption,
+        "rows": rows,
+    }
+    with open(json_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+    fieldnames = list(rows[0].keys())
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    click.echo(f"T3 table ({scope}) JSON → {json_path}")
+    click.echo(f"T3 table ({scope}) CSV  → {csv_path}")
+
+
+def _run_data_dir(run_id: str) -> Path:
+    data_dir = AGGREGATED_DIR / "data" / run_id
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
 
 def _aggregate_reliability(

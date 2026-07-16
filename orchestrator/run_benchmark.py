@@ -183,7 +183,7 @@ def aggregate(run_id: str, results_dir: str) -> None:
     agg_main(["--run-id", run_id, "--results-dir", results_dir], standalone_mode=False)
     graphs_main(["--run-id", run_id], standalone_mode=False)
 
-    summary_path = AGGREGATED_DIR / f"{run_id}_summary.json"
+    summary_path = AGGREGATED_DIR / "data" / run_id / f"{run_id}_summary.json"
     console.print(f"[green]Aggregated:[/green] {summary_path}")
 
 

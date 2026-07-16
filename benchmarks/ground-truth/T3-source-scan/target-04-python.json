@@ -1,6 +1,6 @@
 {
   "_comment": "Ground truth for target-04-python (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
+  "_method": "Manual annotation from synthetic source files with mixed constructor-style and from_pretrained patterns.",
   "target": "target-04-python",
   "target_path": "targets/target-04-python",
   "models": [
@@ -13,14 +13,14 @@
     {
       "id": "BAAI/bge-reranker-v2-m3",
       "detectable": true,
-      "pattern": "Python const reranker_model",
-      "detectable_scope": "python_variable"
+      "pattern": "ChatOpenAI(model=)",
+      "detectable_scope": "python_literal"
     },
     {
       "id": "microsoft/Florence-2-base",
       "detectable": true,
-      "pattern": "AutoProcessor.from_pretrained",
-      "detectable_scope": "python_variable"
+      "pattern": "Ollama(model=)",
+      "detectable_scope": "python_literal"
     },
     {
       "id": "openai/whisper-large-v3",

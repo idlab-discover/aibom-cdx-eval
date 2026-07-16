@@ -1,7 +1,7 @@
 """
 analysis/graphs.py — generate publication-ready figures from aggregated results.
 
-Reads results/aggregated/<run-id>_summary.json and produces PDF figures under:
+Reads results/aggregated/data/<run-id>/<run-id>_summary.json and produces PDF figures under:
   results/aggregated/figures/<run-id>/
 
 Figures:
@@ -104,7 +104,7 @@ T4G2_TOOLS = ["aibomgen-cli", "akumar-aibom", "trusera-aibom"]
 @click.option("--run-id", required=True, help="Run ID to generate figures for.")
 def main(run_id: str) -> None:
     """Generate publication-ready figures for a completed aggregated run."""
-    summary_path = AGGREGATED_DIR / f"{run_id}_summary.json"
+    summary_path = AGGREGATED_DIR / "data" / run_id / f"{run_id}_summary.json"
     if not summary_path.exists():
         click.echo(f"Summary not found: {summary_path}", err=True)
         sys.exit(1)
@@ -366,9 +366,9 @@ def _fig4b_t3_discovery_py(S: dict, out: Path) -> None:
         filename="fig4b_t3_discovery_py.pdf",
         title="Python scope",
         tools=T3_PY_TOOLS,
-        f1_key="f1_py",
-        precision_key="precision_py",
-        recall_key="recall_py",
+        f1_key="f1_scope_python",
+        precision_key="precision_scope_python",
+        recall_key="recall_scope_python",
     )
 
 

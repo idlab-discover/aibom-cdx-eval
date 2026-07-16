@@ -1,8 +1,10 @@
-from transformers import pipeline, AutoFeatureExtractor
+from langchain_anthropic import ChatAnthropic
+from langchain_community.llms import HuggingFaceHub
 
-summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-base")
+
+summarizer = ChatAnthropic(model="facebook/bart-large-cnn")
+extractor = HuggingFaceHub(model_name="openai/whisper-base")
+
 
 if __name__ == "__main__":
-    result = summarizer("Long article text here...", max_length=130)
-    print(result)
+    print("target-03-python synthetic fixture")

@@ -1,6 +1,6 @@
 {
   "_comment": "Ground truth for target-1. Source: aibomgen-cli/targets/target-1/src/use_model.py",
-  "_method": "Manual annotation from source — all models loaded via AutoModel/AutoTokenizer.from_pretrained()",
+  "_method": "Manual annotation from source — mixed from_pretrained and constructor-style model calls.",
   "target": "target-01-python",
   "target_path": "targets/target-01-python",
   "models": [
@@ -37,31 +37,31 @@
     {
       "id": "almanach/Gaperon-1125-24B-SFT",
       "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
+      "pattern": "ChatOpenAI(model=)",
       "detectable_scope": "python_literal"
     },
     {
       "id": "google/medgemma-4b-it",
       "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
+      "pattern": "OpenAI(\"...\")",
       "detectable_scope": "python_literal"
     },
     {
       "id": "google/medgemma-27b-text-it",
       "detectable": true,
-      "pattern": "AutoTokenizer.from_pretrained",
+      "pattern": "ChatAnthropic(model=)",
       "detectable_scope": "python_literal"
     },
     {
       "id": "inceptionai/jais-adapted-70b",
       "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
+      "pattern": "HuggingFaceHub(model_name=)",
       "detectable_scope": "python_literal"
     },
     {
       "id": "Aleph-Alpha/llama-3_1-70b-tfree-hat-sft",
       "detectable": true,
-      "pattern": "AutoTokenizer.from_pretrained",
+      "pattern": "Ollama(model=)",
       "detectable_scope": "python_literal"
     }
   ],
