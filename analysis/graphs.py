@@ -5,17 +5,19 @@ Reads results/aggregated/data/<run-id>/<run-id>_summary.json and produces PDF fi
   results/aggregated/figures/<run-id>/
 
 Figures:
-  fig1a_t1_latency.pdf        — T1 latency (mean duration)
-  fig1b_t1_throughput.pdf     — T1 throughput
-  fig2_t1_boxplot.pdf         — T1 generation-time distribution (boxplot)
-  fig3_t2_reliability.pdf     — T2 success rate bar
-  fig4a_t3_discovery_full.pdf — T3 F1 / precision / recall (full scope)
-    fig4b_t3_discovery_py.pdf   — T3 F1 / precision / recall (python scope)
-    fig4c_t3_discovery_mixed.pdf — T3 F1 / precision / recall (mixed scope)
-    fig4d_t3_discovery_config.pdf — T3 F1 / precision / recall (config scope)
-    fig4e_t3_discovery_cloud_api.pdf — T3 F1 / precision / recall (cloud_api scope)
-    fig5a_t4_conformance.pdf — T4 CycloneDX conformance (G1 + G2)
-    fig5b_t4_completeness.pdf — T4 CycloneDX completeness & breadth (G1 + G2)
+  fig1a_t1_latency.pdf                  — T1 latency (mean duration)
+  fig1b_t1_throughput.pdf               — T1 throughput
+  fig2_t1_boxplot.pdf                   — T1 generation-time distribution (boxplot)
+  fig3_t2_reliability.pdf               — T2 success rate bar
+  fig4a_t3_discovery_full.pdf           — T3 F1 / precision / recall (full scope)
+  fig4b_t3_discovery_py.pdf             — T3 F1 / precision / recall (python scope)
+  fig4c_t3_discovery_mixed.pdf          — T3 F1 / precision / recall (mixed scope)
+  fig4d_t3_discovery_config.pdf         — T3 F1 / precision / recall (config scope)
+  fig4e_t3_discovery_cloud_api.pdf      — T3 F1 / precision / recall (cloud_api scope)
+  fig5a_t4_g1.pdf                       — T4 CycloneDX conformance (G1)
+  fig5a_t4_g2.pdf                       — T4 CycloneDX conformance (G2)
+  fig5b_t4_g1.pdf                       — T4 CycloneDX completeness & breadth (G1)
+  fig5b_t4_g2.pdf                       — T4 CycloneDX completeness & breadth (G2)
 
 Usage:
     python -m analysis.graphs --run-id <run-id>
@@ -486,7 +488,7 @@ def _fig4_t3_panel(
 
 
 def _fig5a_t4_conformance(S: dict, out: Path) -> None:
-    """Figure 5a — T4 conformance side-by-side panels for G1 and G2."""
+    """Figure 5a — T4 conformance plots for G1 and G2 as separate files."""
 
     def _panel(ax: Any, subtask: str, tool_group: list[str], title: str, show_ylabel: bool) -> bool:
         tools = [t for t in tool_group if f"{t}::{subtask}" in S]
@@ -515,27 +517,29 @@ def _fig5a_t4_conformance(S: dict, out: Path) -> None:
         ax.set_title(title)
         return True
 
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 3.8), sharey=True)
-    has_g1 = _panel(axes[0], SUBTASK_T4G1, T4G1_TOOLS, "G1", True)
-    has_g2 = _panel(axes[1], SUBTASK_T4G2, T4G2_TOOLS, "G2", False)
+    for subtask, tool_group, out_name, title in [
+        (SUBTASK_T4G1, T4G1_TOOLS, "fig5a_t4_conformance_g1.pdf", "G1"),
+        (SUBTASK_T4G2, T4G2_TOOLS, "fig5a_t4_conformance_g2.pdf", "G2"),
+    ]:
+        fig, ax = plt.subplots(figsize=(5.4, 3.8))
+        has_data = _panel(ax, subtask, tool_group, title, True)
 
-    if not has_g1 and not has_g2:
+        if not has_data:
+            plt.close(fig)
+            click.echo(f"  Skipped {out_name} (no data)")
+            continue
+
+        v16_patch = mpatches.Patch(facecolor="grey", label="v1.6")
+        v17_patch = mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="v1.7")
+        ax.legend(handles=[v16_patch, v17_patch], frameon=False, fontsize=8, loc="upper center", ncol=2)
+        fig.tight_layout()
+        fig.savefig(out / out_name, bbox_inches="tight")
         plt.close(fig)
-        click.echo("  Skipped fig5a_t4_conformance.pdf (no data)")
-        return
-
-    v16_patch = mpatches.Patch(facecolor="grey", label="v1.6")
-    v17_patch = mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="v1.7")
-    fig.legend(handles=[v16_patch, v17_patch], frameon=False, fontsize=8, loc="upper center", ncol=2)
-    fig.tight_layout(rect=(0, 0, 1, 0.92))
-    out_name = "fig5a_t4_conformance.pdf"
-    fig.savefig(out / out_name, bbox_inches="tight")
-    plt.close(fig)
-    click.echo(f"  Saved {out_name}")
+        click.echo(f"  Saved {out_name}")
 
 
 def _fig5b_t4_completeness(S: dict, out: Path) -> None:
-    """Figure 5b — T4 completeness/breadth side-by-side panels for G1 and G2."""
+    """Figure 5b — T4 completeness/breadth plots for G1 and G2 as separate files."""
 
     def _panel(ax: Any, subtask: str, tool_group: list[str], title: str, show_ylabel: bool) -> bool:
         tools = [t for t in tool_group if f"{t}::{subtask}" in S]
@@ -573,24 +577,26 @@ def _fig5b_t4_completeness(S: dict, out: Path) -> None:
         ax.set_title(title)
         return True
 
-    fig, axes = plt.subplots(1, 2, figsize=(12.0, 3.8), sharey=True)
-    has_g1 = _panel(axes[0], SUBTASK_T4G1, T4G1_TOOLS, "G1", True)
-    has_g2 = _panel(axes[1], SUBTASK_T4G2, T4G2_TOOLS, "G2", False)
+    for subtask, tool_group, out_name, title in [
+        (SUBTASK_T4G1, T4G1_TOOLS, "fig5b_t4_completeness_g1.pdf", "G1"),
+        (SUBTASK_T4G2, T4G2_TOOLS, "fig5b_t4_completeness_g2.pdf", "G2"),
+    ]:
+        fig, ax = plt.subplots(figsize=(6.0, 3.8))
+        has_data = _panel(ax, subtask, tool_group, title, True)
 
-    if not has_g1 and not has_g2:
+        if not has_data:
+            plt.close(fig)
+            click.echo(f"  Skipped {out_name} (no data)")
+            continue
+
+        patches = [
+            mpatches.Patch(facecolor="grey", label="Completeness v1.6"),
+            mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="Completeness v1.7"),
+            mpatches.Patch(facecolor="grey", hatch="xx", label="Breadth v1.6"),
+            mpatches.Patch(facecolor="grey", hatch="xx", alpha=0.7, label="Breadth v1.7"),
+        ]
+        ax.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper center", ncol=1)
+        fig.tight_layout()
+        fig.savefig(out / out_name, bbox_inches="tight")
         plt.close(fig)
-        click.echo("  Skipped fig5b_t4_completeness.pdf (no data)")
-        return
-
-    patches = [
-        mpatches.Patch(facecolor="grey", label="Completeness v1.6"),
-        mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="Completeness v1.7"),
-        mpatches.Patch(facecolor="grey", hatch="xx", label="Breadth v1.6"),
-        mpatches.Patch(facecolor="grey", hatch="xx", alpha=0.7, label="Breadth v1.7"),
-    ]
-    fig.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper center", ncol=4)
-    fig.tight_layout(rect=(0, 0, 1, 0.9))
-    out_name = "fig5b_t4_completeness.pdf"
-    fig.savefig(out / out_name, bbox_inches="tight")
-    plt.close(fig)
-    click.echo(f"  Saved {out_name}")
+        click.echo(f"  Saved {out_name}")
