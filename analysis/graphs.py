@@ -144,6 +144,11 @@ def main(run_id: str) -> None:
 # Figure helpers                                                        #
 # ================================================================== #
 
+def _save_figure(fig: plt.Figure, out_dir: Path, stem: str) -> None:
+    """Write a figure to both PDF and PNG outputs."""
+    for suffix in ("pdf", "png"):
+        fig.savefig(out_dir / f"{stem}.{suffix}", bbox_inches="tight")
+
 def _fig1a_t1_latency(S: dict, out: Path) -> None:
     """Figure 1a — T1: latency (mean duration)."""
     tools  = [t for t in T1_TOOLS if f"{t}::{SUBTASK_T1}" in S]
@@ -162,9 +167,9 @@ def _fig1a_t1_latency(S: dict, out: Path) -> None:
         ax.text(bar.get_x() + bar.get_width() / 2, v + 0.02, f"{v:.2f}s",
                 ha="center", va="bottom", fontsize=8)
     fig.tight_layout()
-    fig.savefig(out / "fig1a_t1_latency.pdf", bbox_inches="tight")
+    _save_figure(fig, out, "fig1a_t1_latency")
     plt.close(fig)
-    click.echo("  Saved fig1a_t1_latency.pdf")
+    click.echo("  Saved fig1a_t1_latency.pdf/.png")
 
 
 def _fig1b_t1_throughput(S: dict, out: Path) -> None:
@@ -185,9 +190,9 @@ def _fig1b_t1_throughput(S: dict, out: Path) -> None:
         ax.text(bar.get_x() + bar.get_width() / 2, v + 0.5, f"{v:.1f}",
                 ha="center", va="bottom", fontsize=8)
     fig.tight_layout()
-    fig.savefig(out / "fig1b_t1_throughput.pdf", bbox_inches="tight")
+    _save_figure(fig, out, "fig1b_t1_throughput")
     plt.close(fig)
-    click.echo("  Saved fig1b_t1_throughput.pdf")
+    click.echo("  Saved fig1b_t1_throughput.pdf/.png")
 
 
 def _fig2_t1_boxplot(
@@ -299,9 +304,9 @@ def _fig2_t1_boxplot(
     fig.text(0.99, 0.01, "N = models x repeats", ha="right", va="bottom", fontsize=7, color="dimgrey")
 
     fig.tight_layout()
-    fig.savefig(out / "fig2_t1_boxplot.pdf", bbox_inches="tight")
+    _save_figure(fig, out, "fig2_t1_boxplot")
     plt.close(fig)
-    click.echo("  Saved fig2_t1_boxplot.pdf")
+    click.echo("  Saved fig2_t1_boxplot.pdf/.png")
 
 
 def _fig3_t2_reliability(S: dict, out: Path) -> None:
@@ -341,9 +346,9 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
                 color="white", fontsize=9, fontweight="bold")
 
     fig.tight_layout()
-    fig.savefig(out / "fig3_t2_reliability.pdf", bbox_inches="tight")
+    _save_figure(fig, out, "fig3_t2_reliability")
     plt.close(fig)
-    click.echo("  Saved fig3_t2_reliability.pdf")
+    click.echo("  Saved fig3_t2_reliability.pdf/.png")
 
 
 def _fig4a_t3_discovery_full(S: dict, out: Path) -> None:
@@ -482,9 +487,9 @@ def _fig4_t3_panel(
     ax.legend(handles=tool_patches, frameon=False, fontsize=8, loc="upper right")
 
     fig.tight_layout()
-    fig.savefig(out / filename, bbox_inches="tight")
+    _save_figure(fig, out, Path(filename).stem)
     plt.close(fig)
-    click.echo(f"  Saved {filename}")
+    click.echo(f"  Saved {filename}/.png")
 
 
 def _fig5a_t4_conformance(S: dict, out: Path) -> None:
@@ -533,9 +538,9 @@ def _fig5a_t4_conformance(S: dict, out: Path) -> None:
         v17_patch = mpatches.Patch(facecolor="grey", hatch="//", alpha=0.7, label="v1.7")
         ax.legend(handles=[v16_patch, v17_patch], frameon=False, fontsize=8, loc="upper center", ncol=2)
         fig.tight_layout()
-        fig.savefig(out / out_name, bbox_inches="tight")
+        _save_figure(fig, out, Path(out_name).stem)
         plt.close(fig)
-        click.echo(f"  Saved {out_name}")
+        click.echo(f"  Saved {out_name}/.png")
 
 
 def _fig5b_t4_completeness(S: dict, out: Path) -> None:
@@ -597,6 +602,6 @@ def _fig5b_t4_completeness(S: dict, out: Path) -> None:
         ]
         ax.legend(handles=patches, frameon=False, fontsize=7.5, loc="upper center", ncol=1)
         fig.tight_layout()
-        fig.savefig(out / out_name, bbox_inches="tight")
+        _save_figure(fig, out, Path(out_name).stem)
         plt.close(fig)
-        click.echo(f"  Saved {out_name}")
+        click.echo(f"  Saved {out_name}/.png")
