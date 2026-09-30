@@ -1,33 +1,32 @@
 {
-  "_comment": "Ground truth for target-10-cloud-api (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
-  "target": "target-10-cloud-api",
-  "target_path": "targets/target-10-cloud-api",
+  "schema_version": 2,
+  "target": "target-13-cloud-api",
   "models": [
     {
       "id": "mistralai/Mistral-7B-Instruct-v0.2",
-      "detectable": true,
-      "pattern": "docker-compose.yml LLM_MODEL",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "docker-compose.yml",
+      "pattern": "compose env HF_INFERENCE_MODEL"
+    },
+    {
+      "id": "gpt-4o",
+      "scope": "yaml_literal",
+      "file": "docker-compose.yml",
+      "pattern": "compose env AZURE_OPENAI_DEPLOYMENT"
+    },
+    {
+      "id": "anthropic.claude-3-haiku-20240307-v1:0",
+      "scope": "yaml_literal",
+      "file": "docker-compose.yml",
+      "pattern": "compose env BEDROCK_MODEL_ID"
     },
     {
       "id": "sentence-transformers/all-MiniLM-L12-v2",
-      "detectable": true,
-      "pattern": "docker-compose.yml EMBED_MODEL",
-      "detectable_scope": "yaml_literal"
-    },
-    {
-      "id": "facebook/bart-large-mnli",
-      "detectable": true,
-      "pattern": "docker-compose.yml CLASSIFIER_MODEL",
-      "detectable_scope": "yaml_literal"
-    },
-    {
-      "id": "philschmid/bart-large-cnn-samsum",
-      "detectable": true,
-      "pattern": "docker-compose.yml SUMMARIZER_MODEL",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "docker-compose.yml",
+      "pattern": "compose env EMBED_MODEL"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

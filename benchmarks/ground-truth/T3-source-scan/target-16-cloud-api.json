@@ -1,38 +1,38 @@
 {
-  "_comment": "Ground truth for target-18-cloud-api (synthetic). Multi-agent orchestration using direct OpenAI and Anthropic SDK clients plus Ollama — the typical pattern when developers bypass LangChain wrappers. model= kwarg appears in API call methods (not class constructors), which tests broader pattern extraction. Also has a config.yaml with model keys (yaml_literal). aibomgen-cli cannot detect cloud-API models; akumar-aibom detects only the Ollama class instantiation (codellama) since the OpenAI/Anthropic model IDs appear in .create() method calls, not class constructors with model_name= kwarg.",
-  "_method": "Manual annotation from target-18-cloud-api/agents.py and target-18-cloud-api/config.yaml.",
-  "target": "target-18-cloud-api",
-  "target_path": "targets/target-18-cloud-api",
+  "schema_version": 2,
+  "target": "target-16-cloud-api",
   "models": [
     {
       "id": "codellama",
-      "detectable": true,
-      "pattern": "Ollama(model=\"codellama\")",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "agents.py",
+      "pattern": "Ollama(model=\"codellama\")"
     },
     {
       "id": "gpt-4o",
-      "detectable": true,
-      "pattern": "openai_client.chat.completions.create(model=\"gpt-4o\")",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "agents.py",
+      "pattern": "openai_client.chat.completions.create(model=\"gpt-4o\")"
     },
     {
       "id": "claude-3-5-haiku-20241022",
-      "detectable": true,
-      "pattern": "anthropic_client.messages.create(model=\"claude-3-5-haiku-20241022\")",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "agents.py",
+      "pattern": "anthropic_client.messages.create(model=\"claude-3-5-haiku-20241022\")"
     },
     {
       "id": "gpt-4o-mini",
-      "detectable": true,
-      "pattern": "config.yaml: models.default: gpt-4o-mini",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "config.yaml: models.default: gpt-4o-mini"
     },
     {
       "id": "text-embedding-3-small",
-      "detectable": true,
-      "pattern": "config.yaml: models.embedding: text-embedding-3-small",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "config.yaml: models.embedding: text-embedding-3-small"
     }
-  ]
+  ],
+  "neutral": [],
+  "not_models": []
 }

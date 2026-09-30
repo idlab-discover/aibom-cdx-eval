@@ -2,15 +2,25 @@
 aggregate.py — cross-tool, cross-task result aggregation.
 
 Reads all metrics.json files from a completed run and produces:
-    results/aggregated/data/<run-id>/<run-id>_summary.json  — per-tool per-sub-task summary stats
+    results/aggregated/data/<run-id>/<run-id>_summary.json      per-tool per-sub-task stats
+    results/aggregated/data/<run-id>/<run-id>_t3_*.{json,csv}   T3 tables (paper/report reuse)
 
-Sub-tasks derived from raw task IDs:
-  T1_T2   → split into T1 (performance) and T2 (reliability) sub-sections
-  T3_T4G2 → split into T3 (discovery) and T4-G2 (CDX quality) sub-sections
-  T1_T2 CDX-capable tools → also produce T4-G1 sub-section
+Sub-tasks derived from the raw task IDs:
+  T1_T2 → T1 (performance), T2 (reliability), T4-MODELID (CycloneDX quality)
+  T3_T4 → T3 (discovery),   T4-SCAN (CycloneDX quality)
+
+Design notes
+  * T3 is RE-SCORED here from the stored ``detected_ids`` and the current ground
+    truth, so ground-truth fixes never require re-running a tool.  A run that
+    found nothing (or crashed) counts as zero detections for that target: no
+    target ever drops out of a tool's average.
+  * T3 headline numbers are MICRO (pooled TP/FP/FN over targets) with a
+    bootstrap 95% CI over targets; macro (mean/SD of per-target scores) is
+    reported next to them.
+  * T1/T2 statistics are taken over unique models (repeats are collapsed
+    first), because repeats of one model are not independent trials.
 
 Usage:
-    python -m scoring.aggregate --run-id <run-id>
     uv run eval aggregate --run-id <run-id>
 """
 
@@ -18,21 +28,22 @@ from __future__ import annotations
 
 import csv
 import json
+import statistics
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 import click
+import numpy as np
 import yaml
 
 from constants import (
     AGGREGATED_DIR,
+    CONFIG_PATH,
     EC_CRASH,
     EC_SUCCESS,
-    CONFIG_PATH,
-    EVAL_ROOT,
-    GT_DIR,
+    EC_SUCCESS_EMPTY,
     K_CDX_BREADTH_V16,
     K_CDX_BREADTH_V17,
     K_CDX_COMPLETENESS_DETAIL_V16,
@@ -43,28 +54,38 @@ from constants import (
     K_CDX_CONFORMANCE_PASS_V17,
     K_CDX_CONFORMANCE_VALID_V16,
     K_CDX_CONFORMANCE_VALID_V17,
+    K_CDX_MODEL_COMPLETENESS_V16,
+    K_CDX_MODEL_COMPLETENESS_V17,
     K_DETECTED_IDS,
     K_ERROR_CLASS,
-    K_F1,
     K_FAILURE_RATE,
     K_FIELDS_PRESENT,
     K_NORMALIZED_THROUGHPUT,
     K_OUTPUT_SIZE_BYTES,
-    K_PRECISION,
-    K_RECALL,
     K_RETRIES_MEAN,
     K_SIZE_NORM_THROUGHPUT,
     K_SUCCESS_RATE,
+    LEGACY_ERROR_CLASSES,
+    LEGACY_TASK_IDS,
     RESULTS_DIR,
     SUBTASK_T1,
     SUBTASK_T2,
     SUBTASK_T3,
-    SUBTASK_T4G1,
-    SUBTASK_T4G2,
+    SUBTASK_T4_MODELID,
+    SUBTASK_T4_SCAN,
     TASK_T1_T2,
-    TASK_T3_T4G2,
+    TASK_T3_T4,
+    TOOL_LABELS,
+    TOOL_ORDER,
 )
+from scoring.ground_truth import ground_truth_path, load_ground_truth
+from scoring.score_cdx_completeness import merge_completeness_detail
+from scoring.score_discovery import match_detections, prf
 from scoring.utils import pass_rate
+
+_BOOTSTRAP_B = 2000
+_BOOTSTRAP_SEED = 42
+_SCOPE_BUCKETS = ("python", "mixed", "config", "cloud_api")
 
 
 @click.command()
@@ -84,11 +105,10 @@ def main(run_id: str, results_dir: str) -> None:
     records = _load_all_metrics(run_dir)
     click.echo(f"Loaded {len(records)} result records from run {run_id}")
 
-    summary = _build_summary(records)
+    summary = _build_summary(records, baselines=_load_baselines(run_dir))
 
     data_dir = _run_data_dir(run_id)
     summary_path = data_dir / f"{run_id}_summary.json"
-
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -105,581 +125,80 @@ def _load_all_metrics(run_dir: Path) -> list[dict[str, Any]]:
     for metrics_file in run_dir.rglob("metrics.json"):
         try:
             with open(metrics_file) as f:
-                records.append(json.load(f))
+                rec = json.load(f)
         except Exception:
             continue
+        # Runs made before the renames are read under the current names.
+        rec["task"] = LEGACY_TASK_IDS.get(rec.get("task", ""), rec.get("task", ""))
+        scores = rec.get("scores") or {}
+        ec = scores.get(K_ERROR_CLASS)
+        if ec in LEGACY_ERROR_CLASSES:
+            scores[K_ERROR_CLASS] = LEGACY_ERROR_CLASSES[ec]
+        rec["scores"] = scores
+        records.append(rec)
     return records
+
+
+def _load_baselines(run_dir: Path) -> dict[str, float]:
+    """tool -> median no-op start-up seconds, from run_meta.json (empty if absent)."""
+    meta = run_dir / "run_meta.json"
+    if not meta.exists():
+        return {}
+    try:
+        data = json.loads(meta.read_text())
+    except Exception:
+        return {}
+    return {
+        tool: float(b["median_seconds"])
+        for tool, b in (data.get("baselines") or {}).items()
+        if isinstance(b, dict) and isinstance(b.get("median_seconds"), (int, float))
+    }
 
 
 # ------------------------------------------------------------------ #
 # Summary                                                              #
 # ------------------------------------------------------------------ #
 
-def _build_summary(records: list[dict]) -> dict[str, Any]:
+def _build_summary(records: list[dict], baselines: dict[str, float] | None = None) -> dict[str, Any]:
     """
-    Produce five sub-sections:
-      T1      — performance metrics from T1_T2 records
-      T2      — reliability metrics from T1_T2 records
-      T3      — discovery metrics from T3_T4G2 records
-      T4-G1   — CDX quality for CDX-capable T1_T2 tools
-      T4-G2   — CDX quality for CDX-capable T3_T4G2 tools
+    Five sub-sections:
+      T1          — performance metrics from T1_T2 records
+      T2          — reliability metrics from T1_T2 records
+      T3          — discovery metrics from T3_T4 records
+      T4-MODELID  — CDX quality of the BOMs built from HF model IDs
+      T4-SCAN     — CDX quality of the BOMs built from source scans
     """
-    t1t2_records   = [r for r in records if r.get("task") == TASK_T1_T2]
-    t3t4g2_records = [r for r in records if r.get("task") == TASK_T3_T4G2]
+    t1t2 = [r for r in records if r.get("task") == TASK_T1_T2]
+    t3t4 = [r for r in records if r.get("task") == TASK_T3_T4]
 
     summary: dict[str, Any] = {}
-
-    _aggregate_section(
-        summary, SUBTASK_T1, t1t2_records,
-        metric_keys=[
-            K_NORMALIZED_THROUGHPUT, K_SIZE_NORM_THROUGHPUT,
-            K_FIELDS_PRESENT, K_OUTPUT_SIZE_BYTES,
-        ],
-    )
-    _aggregate_reliability(summary, SUBTASK_T2, t1t2_records)
-    _aggregate_discovery(summary, SUBTASK_T3, t3t4g2_records)
-    _aggregate_cdx(summary, SUBTASK_T4G1, [r for r in t1t2_records if _has_cdx(r)])
-    _aggregate_cdx(summary, SUBTASK_T4G2, [r for r in t3t4g2_records if _has_cdx(r)])
-
+    _aggregate_t1(summary, t1t2, baselines or {})
+    _aggregate_reliability(summary, SUBTASK_T2, t1t2)
+    _aggregate_discovery(summary, SUBTASK_T3, t3t4)
+    _aggregate_cdx(summary, SUBTASK_T4_MODELID, t1t2)
+    _aggregate_cdx(summary, SUBTASK_T4_SCAN, t3t4)
     return summary
 
 
-def _aggregate_section(
-    summary: dict, sub_task: str,
-    records: list[dict], metric_keys: list[str],
-) -> None:
-    by_tool: dict[str, list[dict]] = defaultdict(list)
-    for r in records:
-        by_tool[r["tool"]].append(r)
-
-    for tool, recs in sorted(by_tool.items()):
-        key = f"{tool}::{sub_task}"
-        scores = [r.get("scores", {}) for r in recs]
-        successes = [r for r in recs if r.get("success")]
-
-        duration_vals = [
-            r["duration_seconds"] for r in successes
-            if r.get("duration_seconds") is not None
-        ]
-
-        summary[key] = {
-            "tool":         tool,
-            "sub_task":     sub_task,
-            "total_runs":   len(recs),
-            "successful":   len(successes),
-            K_SUCCESS_RATE: round(len(successes) / max(len(recs), 1), 4),
-            "metrics": {
-                **{m: _agg_metric(scores, m) for m in metric_keys},
-                "duration_seconds": {
-                    "mean": _mean(duration_vals),
-                    "min":  round(min(duration_vals), 4) if duration_vals else None,
-                    "max":  round(max(duration_vals), 4) if duration_vals else None,
-                    "n":    len(duration_vals),
-                } if duration_vals else None,
-            },
-        }
-
-
-def _aggregate_discovery(
-    summary: dict, sub_task: str, records: list[dict],
-) -> None:
-    """Aggregate T3 discovery metrics: float stats plus TP/FP/FN totals.
-
-    Produces two sets of metrics:
-    - Full ("_all"): all detectable=True models in ground truth.
-    - Python-literal ("_py"): only models whose detectable_scope == "python_literal",
-      the common-denominator pattern every scanner can reasonably attempt.
-    """
-    by_tool: dict[str, list[dict]] = defaultdict(list)
-    for r in records:
-        by_tool[r["tool"]].append(r)
-
-    dataset_scope_map = _load_t3_dataset_scope_map()
-
-    for tool, recs in sorted(by_tool.items()):
-        key = f"{tool}::{sub_task}"
-        scores = [r.get("scores", {}) for r in recs]
-        successes = [r for r in recs if r.get("success")]
-
-        # ── Full metrics (all detectable models) ──────────────────────────────
-        float_metrics = {m: _agg_metric(scores, m) for m in [K_PRECISION, K_RECALL, K_F1]}
-        tp_total  = sum(s.get("tp") or 0 for s in scores)
-        fp_total  = sum(s.get("fp") or 0 for s in scores)
-        fn_total  = sum(s.get("fn") or 0 for s in scores)
-        fp_vals   = [float(s["fp"]) for s in scores if s.get("fp") is not None]
-        fp_per_target = _mean(fp_vals)
-        zero_detect = sum(1 for s in scores if s.get("tp") == 0 and s.get("fp") == 0)
-        zero_detect_rate = round(zero_detect / max(len(recs), 1), 4)
-
-        # ── Python-literal scoped metrics ─────────────────────────────────────
-        # Pre-computed _py fields may not exist in older metrics.json runs.
-        # Recompute on-the-fly from detected_ids + ground truth scope annotations.
-        py_scores = [_compute_py_scores(r) for r in recs]
-        py_float_metrics = {
-            m + "_py": _agg_metric(py_scores, m + "_py")
-            for m in ["precision", "recall", "f1"]
-        }
-        tp_py_total = sum(s.get("tp_py") or 0 for s in py_scores)
-        fp_py_total = sum(s.get("fp_py") or 0 for s in py_scores)
-        fn_py_total = sum(s.get("fn_py") or 0 for s in py_scores)
-
-        # ── Dataset-scope metrics (python/mixed/config/cloud_api) ───────────
-        scope_metrics = _aggregate_scope_metrics(recs, dataset_scope_map)
-
-        summary[key] = {
-            "tool":         tool,
-            "sub_task":     sub_task,
-            "total_runs":   len(recs),
-            "successful":   len(successes),
-            K_SUCCESS_RATE: round(len(successes) / max(len(recs), 1), 4),
-            "metrics": {
-                **float_metrics,
-                "tp_total":           tp_total,
-                "fp_total":           fp_total,
-                "fn_total":           fn_total,
-                "fp_per_target_mean": fp_per_target,
-                "zero_detect_rate":   zero_detect_rate,
-                **py_float_metrics,
-                "tp_py_total":        tp_py_total,
-                "fp_py_total":        fp_py_total,
-                "fn_py_total":        fn_py_total,
-                **scope_metrics,
-            },
-        }
-
-
-_GT_DIR = GT_DIR  # backward-compatible alias; use GT_DIR from constants directly
-
-
-def _normalize(model_id: str) -> str:
-    """Lowercase + strip whitespace for fuzzy model-ID matching."""
-    return model_id.strip().lower()
-
-
-def _compute_py_scores(record: dict) -> dict:
-    """Compute python_literal-scoped TP/FP/FN/precision/recall/f1 for one run.
-
-    Uses detected_ids from the existing metrics.json and the detectable_scope
-    annotations in the ground truth JSON.  FP is computed against the full
-    ground truth so that detecting a non-python_literal model is not penalised
-    as a false positive in the scoped score.
-    """
-    dataset = record.get("dataset", "")
-    gt_path = GT_DIR / f"{dataset}.json"
-    if not gt_path.exists():
-        return {}
-
-    with gt_path.open() as f:
-        gt_data = json.load(f)
-
-    models = gt_data.get("models", [])
-    gt_all_norm  = {_normalize(m["id"]) for m in models if m.get("detectable")}
-    gt_py_norm   = {_normalize(m["id"]) for m in models
-                    if m.get("detectable") and m.get("detectable_scope") == "python_literal"}
-
-    detected_raw: list[str] = record.get("scores", {}).get(K_DETECTED_IDS) or []
-    detected_norm = {_normalize(d) for d in detected_raw}
-
-    tp_py = len(detected_norm & gt_py_norm)
-    fn_py = len(gt_py_norm - detected_norm)
-    # FP: detected something NOT in full ground truth at all
-    fp    = len(detected_norm - gt_all_norm)
-
-    precision_py = tp_py / (tp_py + fp) if (tp_py + fp) > 0 else None
-    recall_py    = tp_py / (tp_py + fn_py) if (tp_py + fn_py) > 0 else None
-    if precision_py is not None and recall_py is not None and (precision_py + recall_py) > 0:
-        f1_py = 2 * precision_py * recall_py / (precision_py + recall_py)
-    else:
-        f1_py = None
-
-    return {
-        "tp_py": tp_py,
-        "fp_py": fp,
-        "fn_py": fn_py,
-        "precision_py": precision_py,
-        "recall_py":    recall_py,
-        "f1_py":        f1_py,
-    }
-
-
-def _load_t3_dataset_scope_map() -> dict[str, str]:
-    """Resolve T3 dataset ID -> scope bucket from orchestrator config."""
-    try:
-        with open(CONFIG_PATH) as f:
-            cfg = yaml.safe_load(f) or {}
-    except Exception:
-        return {}
-
-    task_cfg = cfg.get("tasks", {}).get(TASK_T3_T4G2, {})
-    datasets = task_cfg.get("datasets", [])
-    mapping: dict[str, str] = {}
-    for ds in datasets:
-        ds_id = ds.get("id")
-        scope = ds.get("scope_bucket")
-        if isinstance(ds_id, str) and isinstance(scope, str):
-            mapping[ds_id] = scope
-    return mapping
-
-
-def _aggregate_scope_metrics(
-    records: list[dict],
-    dataset_scope_map: dict[str, str],
-) -> dict[str, Any]:
-    """Aggregate discovery metrics by dataset scope bucket."""
-    scopes = ("python", "mixed", "config", "cloud_api")
-    out: dict[str, Any] = {}
-
-    for scope in scopes:
-        scoped_recs = [
-            r for r in records
-            if dataset_scope_map.get(r.get("dataset", "")) == scope
-        ]
-        scoped_scores = [r.get("scores", {}) for r in scoped_recs]
-
-        out[f"precision_scope_{scope}"] = _agg_metric(scoped_scores, K_PRECISION)
-        out[f"recall_scope_{scope}"] = _agg_metric(scoped_scores, K_RECALL)
-        out[f"f1_scope_{scope}"] = _agg_metric(scoped_scores, K_F1)
-
-        out[f"tp_scope_{scope}_total"] = sum(s.get("tp") or 0 for s in scoped_scores)
-        out[f"fp_scope_{scope}_total"] = sum(s.get("fp") or 0 for s in scoped_scores)
-        out[f"fn_scope_{scope}_total"] = sum(s.get("fn") or 0 for s in scoped_scores)
-
-        fp_vals = [float(s["fp"]) for s in scoped_scores if s.get("fp") is not None]
-        out[f"fp_per_target_scope_{scope}_mean"] = _mean(fp_vals)
-
-        zero_detect = sum(1 for s in scoped_scores if s.get("tp") == 0 and s.get("fp") == 0)
-        out[f"zero_detect_scope_{scope}_rate"] = (
-            round(zero_detect / max(len(scoped_recs), 1), 4) if scoped_recs else None
-        )
-        out[f"n_scope_{scope}"] = len(scoped_recs)
-
-    return out
-
-
-def _write_t3_tables(run_id: str, summary: dict[str, Any]) -> None:
-    """Write canonical T3 full/python scope tables for paper/report reuse."""
-    AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
-
-    full_tools = ("aibomgen-cli", "trusera-aibom", "akumar-aibom")
-    py_tools = ("aibomgen-cli", "trusera-aibom", "akumar-aibom", "jorisbot-aibom")
-
-    full_rows = [_t3_row(summary, tool, scope="full") for tool in full_tools]
-    py_rows = [_t3_row(summary, tool, scope="python") for tool in py_tools]
-
-    full_rows = [r for r in full_rows if r is not None]
-    py_rows = [r for r in py_rows if r is not None]
-
-    _write_table_files(
-        run_id=run_id,
-        suffix="t3_full_scope",
-        rows=full_rows,
-        caption="T3 model discovery results on full scope",
-        scope="full",
-    )
-    _write_table_files(
-        run_id=run_id,
-        suffix="t3_python_scope",
-        rows=py_rows,
-        caption="T3 model discovery results on python scope",
-        scope="python",
-    )
-
-
-def _t3_row(summary: dict[str, Any], tool: str, scope: str) -> dict[str, Any] | None:
-    key = f"{tool}::{SUBTASK_T3}"
-    entry = summary.get(key)
-    if not isinstance(entry, dict):
-        return None
-
-    metrics = entry.get("metrics", {})
-    if scope == "full":
-        return {
-            "tool": tool,
-            "scope": "full",
-            "f1": _metric_mean(metrics, "f1"),
-            "precision": _metric_mean(metrics, "precision"),
-            "recall": _metric_mean(metrics, "recall"),
-            "tp": metrics.get("tp_total"),
-            "fp": metrics.get("fp_total"),
-            "fn": metrics.get("fn_total"),
-            "total_runs": entry.get("total_runs"),
-            "successful_runs": entry.get("successful"),
-            "metric_n": _metric_n(metrics, "f1"),
-        }
-
-    return {
-        "tool": tool,
-        "scope": "python",
-        "f1": _metric_mean(metrics, "f1_scope_python"),
-        "precision": _metric_mean(metrics, "precision_scope_python"),
-        "recall": _metric_mean(metrics, "recall_scope_python"),
-        "tp": metrics.get("tp_scope_python_total"),
-        "fp": metrics.get("fp_scope_python_total"),
-        "fn": metrics.get("fn_scope_python_total"),
-        "targets_in_scope": metrics.get("n_scope_python"),
-        "metric_n": _metric_n(metrics, "f1_scope_python"),
-    }
-
-
-def _metric_mean(metrics: dict[str, Any], key: str) -> float | None:
-    value = metrics.get(key)
-    if isinstance(value, dict):
-        mean = value.get("mean")
-        return float(mean) if isinstance(mean, (int, float)) else None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
-def _metric_n(metrics: dict[str, Any], key: str) -> int | None:
-    value = metrics.get(key)
-    if isinstance(value, dict):
-        n = value.get("n")
-        return int(n) if isinstance(n, (int, float)) else None
-    return None
-
-
-def _write_table_files(
-    run_id: str,
-    suffix: str,
-    rows: list[dict[str, Any]],
-    caption: str,
-    scope: str,
-) -> None:
-    if not rows:
-        return
-
-    data_dir = _run_data_dir(run_id)
-    json_path = data_dir / f"{run_id}_{suffix}.json"
-    csv_path = data_dir / f"{run_id}_{suffix}.csv"
-
-    payload = {
-        "run_id": run_id,
-        "sub_task": SUBTASK_T3,
-        "scope": scope,
-        "caption": caption,
-        "rows": rows,
-    }
-    with open(json_path, "w") as f:
-        json.dump(payload, f, indent=2)
-
-    fieldnames = list(rows[0].keys())
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-    click.echo(f"T3 table ({scope}) JSON → {json_path}")
-    click.echo(f"T3 table ({scope}) CSV  → {csv_path}")
-
-
-def _run_data_dir(run_id: str) -> Path:
-    data_dir = AGGREGATED_DIR / "data" / run_id
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir
-
-
-def _aggregate_reliability(
-    summary: dict, sub_task: str, records: list[dict],
-) -> None:
-    by_tool: dict[str, list[dict]] = defaultdict(list)
-    for r in records:
-        by_tool[r["tool"]].append(r)
-
-    for tool, recs in sorted(by_tool.items()):
-        key = f"{tool}::{sub_task}"
-        successes = sum(1 for r in recs if r.get("success"))
-        total = len(recs)
-        success_rate = round(successes / max(total, 1), 4)
-
-        error_counts: dict[str, int] = defaultdict(int)
-        for r in recs:
-            ec = r.get("scores", {}).get(K_ERROR_CLASS) or (
-                EC_SUCCESS if r.get("success") else EC_CRASH
-            )
-            error_counts[ec] += 1
-
-        summary[key] = {
-            "tool":            tool,
-            "sub_task":        sub_task,
-            "total_runs":      total,
-            "successful":      successes,
-            K_SUCCESS_RATE:    success_rate,
-            K_FAILURE_RATE:    round(1 - success_rate, 4),
-            "error_breakdown": dict(error_counts),
-            K_RETRIES_MEAN:    _mean([r.get("retries", 0) for r in recs]),
-        }
-
-
-def _merge_completeness_detail(detail: dict[str, bool]) -> dict[str, bool]:
-    """Treat components[].X and metadata.component.X as the same logical field.
-
-    CycloneDX allows the primary subject component to live in either
-    ``metadata.component`` (BOM-of-one pattern) or ``components[]`` (inventory
-    pattern).  Both are valid; tools should not be penalised for choosing one
-    over the other.
-
-    For every ``components[].X`` path we OR its value with the corresponding
-    ``metadata.component.X`` value (and vice versa).  Then, to avoid counting
-    the same logical field twice, ``metadata.component.X`` paths that have a
-    matching ``components[].X`` counterpart are removed from the merged dict —
-    the merged result lives exclusively under the ``components[].X`` key.
-    """
-    PREFIX_COMP = "components[]."
-    PREFIX_META = "metadata.component."
-
-    merged: dict[str, bool] = {}
-    for path, val in detail.items():
-        if path.startswith(PREFIX_COMP):
-            rest = path[len(PREFIX_COMP):]
-            meta_path = PREFIX_META + rest
-            merged[path] = bool(val) or bool(detail.get(meta_path, False))
-        elif path.startswith(PREFIX_META):
-            rest = path[len(PREFIX_META):]
-            comp_path = PREFIX_COMP + rest
-            if comp_path in detail:
-                # Handled above under the components[].X key — skip to deduplicate.
-                continue
-            merged[path] = bool(val)
-        else:
-            merged[path] = bool(val)
-    return merged
-
-
-def _agg_cdx_coverage(
-    scores: list[dict],
-    detail_key: str,
-    pct_key: str,
-) -> dict | None:
-    """Single-pass computation of both breadth and completeness from per-run data.
-
-    breadth     = |union of schema paths filled in ≥1 run| / |total paths|
-                  after merging metadata.component.X and components[].X
-    completeness = mean of the pre-computed per-run pct values (from metrics.json)
-                  Uses the same denominator as the individual run scorer, so
-                  the summary value is directly comparable to per-run metrics.
-
-    Falls back to mean of per-run pcts when detail is absent (e.g. v17 fallback).
-
-    Returns a dict with keys:
-        breadth_pct           float   (primary ranking metric)
-        completeness_pct      float | None
-        distinct_paths_filled int     (only when detail available)
-        total_paths           int     (only when detail available)
-        n                     int
-    """
-    union_true: set[str] = set()
-    total_paths: int | None = None
-    n_with_detail = 0
-    per_run_pcts: list[float] = []
-
-    for s in scores:
-        detail = s.get(detail_key)
-        if isinstance(detail, dict) and detail:
-            merged = _merge_completeness_detail(detail)
-            if total_paths is None:
-                total_paths = len(merged)
-            union_true.update(p for p, v in merged.items() if v)
-            n_with_detail += 1
-        # Always use the pre-computed pct for the mean — consistent with per-run
-        # metrics.json values and avoids the merged-path denominator mismatch.
-        raw = s.get(pct_key)
-        if isinstance(raw, (int, float)):
-            per_run_pcts.append(float(raw))
-
-    if not per_run_pcts and n_with_detail == 0:
-        return None
-
-    completeness_pct = round(_mean(per_run_pcts), 4) if per_run_pcts else None
-
-    if total_paths and n_with_detail > 0:
-        breadth_pct = round(len(union_true) / total_paths * 100, 4)
-        return {
-            "breadth_pct":           breadth_pct,
-            "completeness_pct":      completeness_pct,
-            "distinct_paths_filled": len(union_true),
-            "total_paths":           total_paths,
-            "n":                     n_with_detail,
-        }
-
-    # Fallback: no detail — breadth equals completeness (no union available)
-    return {
-        "breadth_pct":      completeness_pct,
-        "completeness_pct": completeness_pct,
-        "n":                len(per_run_pcts),
-    }
-
-
-def _coverage_to_summary_metrics(
-    cov: dict | None,
-) -> tuple[dict | None, dict | None]:
-    """Split a coverage result into separate (completeness, breadth) summary dicts.
-
-    Both use ``{"mean": ..., "n": ...}`` shape expected by report and graph generation.
-    Breadth also carries the path-count breakdown for transparency.
-    """
-    if cov is None:
-        return None, None
-    n = cov.get("n")
-    completeness = (
-        {"mean": cov["completeness_pct"], "n": n}
-        if cov.get("completeness_pct") is not None else None
-    )
-    breadth: dict = {"mean": cov["breadth_pct"], "n": n}
-    if "distinct_paths_filled" in cov:
-        breadth["distinct_paths_filled"] = cov["distinct_paths_filled"]
-        breadth["total_paths"] = cov["total_paths"]
-    return completeness, breadth
-
-
-def _aggregate_cdx(
-    summary: dict, sub_task: str, records: list[dict],
-) -> None:
-    by_tool: dict[str, list[dict]] = defaultdict(list)
-    for r in records:
-        by_tool[r["tool"]].append(r)
-
-    for tool, recs in sorted(by_tool.items()):
-        key = f"{tool}::{sub_task}"
-        scores = [r.get("scores", {}) for r in recs]
-
-        v16_valid = [s[K_CDX_CONFORMANCE_VALID_V16] for s in scores
-                     if s.get(K_CDX_CONFORMANCE_VALID_V16) is not None]
-        v17_valid = [s[K_CDX_CONFORMANCE_VALID_V17] for s in scores
-                     if s.get(K_CDX_CONFORMANCE_VALID_V17) is not None]
-
-        _cov16 = _agg_cdx_coverage(scores, K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_COMPLETENESS_V16)
-        _cov17 = _agg_cdx_coverage(scores, K_CDX_COMPLETENESS_DETAIL_V17, K_CDX_COMPLETENESS_V17)
-        c16, b16 = _coverage_to_summary_metrics(_cov16)
-        c17, b17 = _coverage_to_summary_metrics(_cov17)
-
-        summary[key] = {
-            "tool":     tool,
-            "sub_task": sub_task,
-            "total_runs": len(recs),
-            "metrics": {
-                K_CDX_COMPLETENESS_V16:    c16,
-                K_CDX_BREADTH_V16:         b16,
-                K_CDX_COMPLETENESS_V17:    c17,
-                K_CDX_BREADTH_V17:         b17,
-                K_CDX_CONFORMANCE_PASS_V16: pass_rate(v16_valid),
-                K_CDX_CONFORMANCE_PASS_V17: pass_rate(v17_valid),
-            },
-        }
-
-
-def _has_cdx(record: dict) -> bool:
-    return record.get("scores", {}).get(K_CDX_CONFORMANCE_VALID_V16) is not None
-
-
 # ------------------------------------------------------------------ #
-# Helpers                                                              #
+# Generic statistics                                                   #
 # ------------------------------------------------------------------ #
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return round(sum(values) / len(values), 4)
+
+
+def _stdev(values: list[float]) -> float | None:
+    """Sample standard deviation, or None when fewer than 2 values."""
+    if len(values) < 2:
+        return None
+    return round(statistics.stdev(values), 4)
+
 
 def _agg_metric(scores_list: list[dict], key: str) -> dict | None:
     values = [s[key] for s in scores_list if key in s and s[key] is not None]
-    if not values:
-        return None
     numeric = [float(v) for v in values if isinstance(v, (int, float, bool))]
     if not numeric:
         return None
@@ -691,10 +210,475 @@ def _agg_metric(scores_list: list[dict], key: str) -> dict | None:
     }
 
 
-def _mean(values: list[float]) -> float | None:
-    if not values:
+def _bootstrap_median_ci(values: list[float]) -> tuple[float, float] | None:
+    """95% bootstrap CI of the median, resampling units (models) with replacement."""
+    if len(values) < 2:
         return None
-    return round(sum(values) / len(values), 4)
+    arr = np.asarray(values, dtype=float)
+    rng = np.random.default_rng(_BOOTSTRAP_SEED)
+    idx = rng.integers(0, len(arr), size=(_BOOTSTRAP_B, len(arr)))
+    meds = np.median(arr[idx], axis=1)
+    lo, hi = np.percentile(meds, [2.5, 97.5])
+    return round(float(lo), 4), round(float(hi), 4)
+
+
+def _distribution(per_model: dict[str, list[float]]) -> dict | None:
+    """Median / IQR / 95% CI of the median over UNIQUE models.
+
+    Each model's repeats are collapsed to their median first: repeats of one
+    model are not independent samples.
+    """
+    model_vals = [statistics.median(v) for v in per_model.values() if v]
+    if not model_vals:
+        return None
+    q1, q3 = (float(x) for x in np.percentile(model_vals, [25, 75]))
+    ci = _bootstrap_median_ci(model_vals)
+    return {
+        "median":   round(statistics.median(model_vals), 4),
+        "q1":       round(q1, 4),
+        "q3":       round(q3, 4),
+        "ci_low":   ci[0] if ci else None,
+        "ci_high":  ci[1] if ci else None,
+        "n_models": len(model_vals),
+    }
+
+
+# ------------------------------------------------------------------ #
+# T1 — performance                                                     #
+# ------------------------------------------------------------------ #
+
+def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float]) -> None:
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_tool[r["tool"]].append(r)
+
+    for tool, recs in sorted(by_tool.items()):
+        scores = [r.get("scores", {}) for r in recs]
+        successes = [r for r in recs if r.get("success")]
+        baseline = baselines.get(tool)
+
+        durations = [
+            r["duration_seconds"] for r in successes if r.get("duration_seconds") is not None
+        ]
+        per_model_dur: dict[str, list[float]] = defaultdict(list)
+        per_model_thr: dict[str, list[float]] = defaultdict(list)
+        per_model_net: dict[str, list[float]] = defaultdict(list)
+        for r in successes:
+            spec = r.get("input_spec", "")
+            d = r.get("duration_seconds")
+            if isinstance(d, (int, float)):
+                per_model_dur[spec].append(float(d))
+                if baseline is not None:
+                    per_model_net[spec].append(max(float(d) - baseline, 0.001))
+            thr = (r.get("scores") or {}).get(K_NORMALIZED_THROUGHPUT)
+            if isinstance(thr, (int, float)):
+                per_model_thr[spec].append(float(thr))
+
+        summary[f"{tool}::{SUBTASK_T1}"] = {
+            "tool":         tool,
+            "sub_task":     SUBTASK_T1,
+            "total_runs":   len(recs),
+            "successful":   len(successes),
+            K_SUCCESS_RATE: round(len(successes) / max(len(recs), 1), 4),
+            "metrics": {
+                **{
+                    m: _agg_metric(scores, m)
+                    for m in (K_NORMALIZED_THROUGHPUT, K_SIZE_NORM_THROUGHPUT,
+                              K_FIELDS_PRESENT, K_OUTPUT_SIZE_BYTES)
+                },
+                "duration_seconds": {
+                    "mean": _mean(durations),
+                    "min":  round(min(durations), 4),
+                    "max":  round(max(durations), 4),
+                    "n":    len(durations),
+                } if durations else None,
+                # Distributions over unique models (repeats collapsed to their median).
+                "duration_stats":            _distribution(per_model_dur),
+                "throughput_stats":          _distribution(per_model_thr),
+                # Duration minus the tool's no-op start-up cost (run_meta.json baselines).
+                "startup_baseline_seconds":  baseline,
+                "net_duration_stats":        _distribution(per_model_net) if baseline is not None else None,
+            },
+        }
+
+
+# ------------------------------------------------------------------ #
+# T2 — reliability                                                     #
+# ------------------------------------------------------------------ #
+
+def _aggregate_reliability(summary: dict, sub_task: str, records: list[dict]) -> None:
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_tool[r["tool"]].append(r)
+
+    for tool, recs in sorted(by_tool.items()):
+        total = len(recs)
+        successes = sum(1 for r in recs if r.get("success"))
+        success_rate = round(successes / max(total, 1), 4)
+
+        def _ec(r: dict) -> str:
+            return r.get("scores", {}).get(K_ERROR_CLASS) or (
+                EC_SUCCESS if r.get("success") else EC_CRASH
+            )
+
+        error_counts: Counter[str] = Counter(_ec(r) for r in recs)
+
+        # Per unique model: it fails only when ALL its repeats fail; "flaky" when mixed.
+        by_model: dict[str, list[dict]] = defaultdict(list)
+        for r in recs:
+            by_model[r.get("input_spec", "")].append(r)
+        failed_models: dict[str, str] = {}
+        flaky = 0
+        for spec, rs in by_model.items():
+            oks = [bool(r.get("success")) for r in rs]
+            if not any(oks):
+                failed_models[spec] = Counter(_ec(r) for r in rs).most_common(1)[0][0]
+            elif not all(oks):
+                flaky += 1
+        n_models = len(by_model)
+
+        summary[f"{tool}::{sub_task}"] = {
+            "tool":            tool,
+            "sub_task":        sub_task,
+            "total_runs":      total,
+            "successful":      successes,
+            K_SUCCESS_RATE:    success_rate,
+            K_FAILURE_RATE:    round(1 - success_rate, 4),
+            "error_breakdown": dict(error_counts),
+            # per unique model — the number to quote (repeats are not independent trials)
+            "n_models":               n_models,
+            "n_models_failed":        len(failed_models),
+            "n_models_flaky":         flaky,
+            "model_success_rate":     round(1 - len(failed_models) / max(n_models, 1), 4),
+            "error_breakdown_models": dict(Counter(failed_models.values())),
+            "failed_models":          sorted(failed_models),
+            K_RETRIES_MEAN:    _mean([r.get("retries", 0) for r in recs]),
+        }
+
+
+# ------------------------------------------------------------------ #
+# T3 — discovery                                                       #
+# ------------------------------------------------------------------ #
+
+def _load_t3_dataset_scope_map() -> dict[str, str]:
+    """Resolve T3 dataset ID -> scope bucket from orchestrator config."""
+    try:
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+    datasets = cfg.get("tasks", {}).get(TASK_T3_T4, {}).get("datasets", [])
+    return {
+        ds["id"]: ds["scope_bucket"]
+        for ds in datasets
+        if isinstance(ds.get("id"), str) and isinstance(ds.get("scope_bucket"), str)
+    }
+
+
+def _score_target(record: dict) -> dict | None:
+    """Re-score one T3 record against the CURRENT ground truth.
+
+    A run without detections (empty scan, crash, timeout) is scored as an empty
+    detection list: F1 = 0 and every ground-truth model a miss.
+    """
+    gt_path = ground_truth_path(record.get("dataset", ""))
+    if not gt_path.exists():
+        return None
+    gt = load_ground_truth(gt_path)
+    detected = (record.get("scores") or {}).get(K_DETECTED_IDS) or []
+    m = match_detections(detected, gt)
+    tp, fp, fn = len(m.tp_ids), len(m.fp_ids), len(m.fn_ids)
+    return {
+        "dataset": record.get("dataset"),
+        "tp": tp, "fp": fp, "fn": fn,
+        "n_detected": len({d.strip().lower() for d in detected}),
+        "failed": not record.get("success"),
+        "tp_by_scope": dict(Counter(m.scope_of[i] for i in m.tp_ids)),
+        "fn_by_scope": dict(Counter(m.scope_of[i] for i in m.fn_ids)),
+        **{f"{k}_target": v for k, v in prf(tp, fp, fn).items()},
+    }
+
+
+def _bootstrap_micro_ci(items: list[tuple[int, int, int]]) -> dict[str, tuple[float | None, float | None]]:
+    """95% bootstrap CI of pooled precision/recall/F1, resampling TARGETS."""
+    empty: dict[str, tuple[float | None, float | None]] = {
+        k: (None, None) for k in ("precision", "recall", "f1")
+    }
+    if len(items) < 2:
+        return empty
+    arr = np.asarray(items, dtype=float)                       # (n_targets, 3): tp, fp, fn
+    rng = np.random.default_rng(_BOOTSTRAP_SEED)
+    idx = rng.integers(0, len(arr), size=(_BOOTSTRAP_B, len(arr)))
+    tp, fp, fn = arr[idx].sum(axis=1).T
+    with np.errstate(divide="ignore", invalid="ignore"):
+        precision = np.where(tp + fp > 0, tp / (tp + fp), np.nan)
+        recall = np.where(tp + fn > 0, tp / (tp + fn), np.nan)
+        f1 = np.where(tp > 0, 2 * precision * recall / (precision + recall), 0.0)
+    out = dict(empty)
+    for name, vals in (("precision", precision), ("recall", recall), ("f1", f1)):
+        vals = vals[~np.isnan(vals)]
+        if len(vals):
+            lo, hi = np.percentile(vals, [2.5, 97.5])
+            out[name] = (round(float(lo), 4), round(float(hi), 4))
+    return out
+
+
+def _discovery_block(targets: list[dict]) -> dict[str, Any]:
+    """Micro (pooled) + macro discovery metrics over a set of scored targets."""
+    tp = sum(t["tp"] for t in targets)
+    fp = sum(t["fp"] for t in targets)
+    fn = sum(t["fn"] for t in targets)
+    micro = prf(tp, fp, fn)
+    ci = _bootstrap_micro_ci([(t["tp"], t["fp"], t["fn"]) for t in targets])
+    f1s = [t["f1_target"] for t in targets if t["f1_target"] is not None]
+    recalls = [t["recall_target"] for t in targets if t["recall_target"] is not None]
+    n = len(targets)
+    return {
+        "precision": {"mean": micro["precision"], "ci_low": ci["precision"][0],
+                      "ci_high": ci["precision"][1], "n": n},
+        "recall":    {"mean": micro["recall"], "ci_low": ci["recall"][0],
+                      "ci_high": ci["recall"][1], "n": n},
+        "f1":        {"mean": micro["f1"], "ci_low": ci["f1"][0], "ci_high": ci["f1"][1], "n": n,
+                      "macro_mean": _mean(f1s), "macro_std": _stdev(f1s)},
+        "macro_recall_mean": _mean(recalls),
+        "tp_total": tp, "fp_total": fp, "fn_total": fn,
+        "fp_per_target_mean": _mean([float(t["fp"]) for t in targets]),
+        "zero_detect_rate": round(sum(1 for t in targets if t["n_detected"] == 0) / n, 4) if n else None,
+        "failed_runs": sum(1 for t in targets if t["failed"]),
+        "n_targets": n,
+    }
+
+
+def _aggregate_discovery(summary: dict, sub_task: str, records: list[dict]) -> None:
+    """T3: one scored entry per (tool, target); headline = micro over targets."""
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        by_tool[r["tool"]].append(r)
+    scope_map = _load_t3_dataset_scope_map()
+
+    for tool, recs in sorted(by_tool.items()):
+        # T3 jobs are not repeated; if a target was run twice keep the latest run.
+        latest: dict[str, dict] = {}
+        for r in sorted(recs, key=lambda x: x.get("timestamp_start", "")):
+            latest[r.get("dataset", "")] = r
+        targets = [t for t in (_score_target(r) for r in latest.values()) if t is not None]
+        if not targets:
+            continue
+
+        metrics: dict[str, Any] = dict(_discovery_block(targets))
+
+        for scope in _SCOPE_BUCKETS:
+            scoped = [t for t in targets if scope_map.get(t["dataset"]) == scope]
+            if not scoped:
+                continue
+            block = _discovery_block(scoped)
+            for key in ("precision", "recall", "f1"):
+                metrics[f"{key}_scope_{scope}"] = block[key]
+            for key in ("tp", "fp", "fn"):
+                metrics[f"{key}_scope_{scope}_total"] = block[f"{key}_total"]
+            metrics[f"fp_per_target_scope_{scope}_mean"] = block["fp_per_target_mean"]
+            metrics[f"zero_detect_scope_{scope}_rate"] = block["zero_detect_rate"]
+            metrics[f"n_scope_{scope}"] = block["n_targets"]
+
+        # Recall by pattern class (ground-truth `scope`: python_literal, yaml_literal, ...)
+        tp_by: Counter[str] = Counter()
+        fn_by: Counter[str] = Counter()
+        for t in targets:
+            tp_by.update(t["tp_by_scope"])
+            fn_by.update(t["fn_by_scope"])
+        metrics["recall_by_pattern"] = {
+            s: {
+                "tp": tp_by[s], "fn": fn_by[s],
+                "recall": round(tp_by[s] / (tp_by[s] + fn_by[s]), 4) if (tp_by[s] + fn_by[s]) else None,
+            }
+            for s in sorted(set(tp_by) | set(fn_by))
+        }
+        metrics["per_target"] = {
+            t["dataset"]: {k: t[k] for k in ("tp", "fp", "fn", "f1_target", "failed")}
+            for t in targets
+        }
+
+        n_ok = sum(1 for r in latest.values() if r.get("success"))
+        summary[f"{tool}::{sub_task}"] = {
+            "tool":         tool,
+            "sub_task":     sub_task,
+            "total_runs":   len(recs),
+            "successful":   n_ok,
+            K_SUCCESS_RATE: round(n_ok / max(len(latest), 1), 4),
+            "metrics":      metrics,
+        }
+
+
+# ------------------------------------------------------------------ #
+# T3 tables                                                            #
+# ------------------------------------------------------------------ #
+
+def _write_t3_tables(run_id: str, summary: dict[str, Any]) -> None:
+    """Write T3 tables (all scanners, jorisbot included) for the whole set and per scope."""
+    AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
+    tools = [t for t in TOOL_ORDER if f"{t}::{SUBTASK_T3}" in summary]
+
+    for scope in ("full", *_SCOPE_BUCKETS):
+        rows = [r for r in (_t3_row(summary, tool, scope) for tool in tools) if r is not None]
+        _write_table_files(
+            run_id, f"t3_scope_{scope}", rows,
+            caption=f"T3 model discovery — {'all targets' if scope == 'full' else scope + ' targets'}",
+            scope=scope,
+        )
+
+
+def _t3_row(summary: dict[str, Any], tool: str, scope: str) -> dict[str, Any] | None:
+    entry = summary.get(f"{tool}::{SUBTASK_T3}")
+    if not isinstance(entry, dict):
+        return None
+    m = entry.get("metrics", {})
+    sfx = "" if scope == "full" else f"_scope_{scope}"
+    if scope != "full" and m.get(f"f1{sfx}") is None:
+        return None
+
+    def g(key: str, field: str = "mean") -> float | None:
+        v = m.get(f"{key}{sfx}")
+        return v.get(field) if isinstance(v, dict) else None
+
+    return {
+        "tool": tool,
+        "label": TOOL_LABELS.get(tool, tool),
+        "scope": scope,
+        "f1": g("f1"), "f1_ci_low": g("f1", "ci_low"), "f1_ci_high": g("f1", "ci_high"),
+        "precision": g("precision"), "recall": g("recall"),
+        "f1_macro_mean": g("f1", "macro_mean"), "f1_macro_std": g("f1", "macro_std"),
+        "tp": m.get(f"tp{sfx}_total" if sfx else "tp_total"),
+        "fp": m.get(f"fp{sfx}_total" if sfx else "fp_total"),
+        "fn": m.get(f"fn{sfx}_total" if sfx else "fn_total"),
+        "n_targets": m.get(f"n_scope_{scope}") if sfx else m.get("n_targets"),
+        "zero_detect_rate": m.get(f"zero_detect_scope_{scope}_rate") if sfx else m.get("zero_detect_rate"),
+        "failed_runs": m.get("failed_runs") if not sfx else None,
+    }
+
+
+def _write_table_files(run_id: str, suffix: str, rows: list[dict[str, Any]], caption: str, scope: str) -> None:
+    if not rows:
+        return
+    data_dir = _run_data_dir(run_id)
+    json_path = data_dir / f"{run_id}_{suffix}.json"
+    csv_path = data_dir / f"{run_id}_{suffix}.csv"
+
+    with open(json_path, "w") as f:
+        json.dump({"run_id": run_id, "sub_task": SUBTASK_T3, "scope": scope,
+                   "caption": caption, "rows": rows}, f, indent=2)
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    click.echo(f"T3 table ({scope}) → {csv_path}")
+
+
+def _run_data_dir(run_id: str) -> Path:
+    data_dir = AGGREGATED_DIR / "data" / run_id
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
+# ------------------------------------------------------------------ #
+# T4 — CycloneDX quality                                               #
+# ------------------------------------------------------------------ #
+
+def _per_input_stats(records: list[dict], pct_key: str) -> dict | None:
+    """Mean and SD of a per-run percentage across unique inputs.
+
+    Repeats of the same input_spec are averaged first: tool outputs are
+    deterministic per input, so counting every repeat would inflate n
+    without adding spread.  ``mean`` is over all runs (identical to the
+    per-input mean when every input has the same number of repeats).
+    """
+    per_run: list[float] = []
+    per_input: dict[str, list[float]] = defaultdict(list)
+    for r in records:
+        raw = r.get("scores", {}).get(pct_key)
+        if isinstance(raw, (int, float)):
+            per_run.append(float(raw))
+            per_input[r.get("input_spec", "")].append(float(raw))
+    if not per_run:
+        return None
+    input_means = [_mean(v) for v in per_input.values()]
+    return {
+        "mean":     round(_mean(per_run), 4),
+        "n":        len(per_run),
+        "std":      _stdev(input_means),
+        "n_inputs": len(input_means),
+    }
+
+
+def _agg_cdx_breadth(records: list[dict], detail_key: str) -> dict | None:
+    """breadth = |union of schema paths filled in ≥1 run| / |total paths|.
+
+    Per-run details are already merged (metadata.component.X ≡ components[].X)
+    by the scorer; merging again keeps older metrics.json files comparable.
+    """
+    union_true: set[str] = set()
+    total_paths: int | None = None
+    n_with_detail = 0
+    for r in records:
+        detail = r.get("scores", {}).get(detail_key)
+        if isinstance(detail, dict) and detail:
+            merged = merge_completeness_detail(detail)
+            if total_paths is None:
+                total_paths = len(merged)
+            union_true.update(p for p, v in merged.items() if v)
+            n_with_detail += 1
+    if not total_paths:
+        return None
+    return {
+        "mean":                  round(len(union_true) / total_paths * 100, 4),
+        "n":                     n_with_detail,
+        "distinct_paths_filled": len(union_true),
+        "total_paths":           total_paths,
+    }
+
+
+def _has_cdx(record: dict) -> bool:
+    return record.get("scores", {}).get(K_CDX_CONFORMANCE_VALID_V16) is not None
+
+
+def _aggregate_cdx(summary: dict, sub_task: str, all_records: list[dict]) -> None:
+    """T4 for every CDX-producing tool.  ``total_runs`` counts ALL runs of the tool;
+    runs that emitted no BOM (an empty scan) are reported as ``n_no_bom`` and are
+    not scored."""
+    by_tool: dict[str, list[dict]] = defaultdict(list)
+    for r in all_records:
+        by_tool[r["tool"]].append(r)
+
+    for tool, all_recs in sorted(by_tool.items()):
+        recs = [r for r in all_recs if _has_cdx(r)]
+        if not recs:
+            continue
+        scores = [r.get("scores", {}) for r in recs]
+
+        v16_valid = [s[K_CDX_CONFORMANCE_VALID_V16] for s in scores
+                     if s.get(K_CDX_CONFORMANCE_VALID_V16) is not None]
+        v17_valid = [s[K_CDX_CONFORMANCE_VALID_V17] for s in scores
+                     if s.get(K_CDX_CONFORMANCE_VALID_V17) is not None]
+
+        summary[f"{tool}::{sub_task}"] = {
+            "tool":       tool,
+            "sub_task":   sub_task,
+            "total_runs": len(all_recs),
+            "n_scored":   len(recs),
+            "n_no_bom":   sum(
+                1 for r in all_recs
+                if not _has_cdx(r) and r.get("scores", {}).get(K_ERROR_CLASS) == EC_SUCCESS_EMPTY
+            ),
+            "metrics": {
+                K_CDX_COMPLETENESS_V16:       _per_input_stats(recs, K_CDX_COMPLETENESS_V16),
+                K_CDX_BREADTH_V16:            _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V16),
+                K_CDX_MODEL_COMPLETENESS_V16: _per_input_stats(recs, K_CDX_MODEL_COMPLETENESS_V16),
+                K_CDX_COMPLETENESS_V17:       _per_input_stats(recs, K_CDX_COMPLETENESS_V17),
+                K_CDX_BREADTH_V17:            _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V17),
+                K_CDX_MODEL_COMPLETENESS_V17: _per_input_stats(recs, K_CDX_MODEL_COMPLETENESS_V17),
+                K_CDX_CONFORMANCE_PASS_V16:   pass_rate(v16_valid),
+                K_CDX_CONFORMANCE_PASS_V17:   pass_rate(v17_valid),
+            },
+        }
 
 
 if __name__ == "__main__":

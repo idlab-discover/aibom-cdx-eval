@@ -30,34 +30,56 @@ def _deduplicate(ids: list[str]) -> list[str]:
 
 
 # ------------------------------------------------------------------ #
-# CycloneDX JSON  (aibomgen-cli, aibom-generator, ALOHA, trusera-aibom, akumar)
+# CycloneDX JSON  (aibomgen-cli, trusera-aibom)
 # ------------------------------------------------------------------ #
+
+ML_MODEL_TYPE = "machine-learning-model"
+
 
 def extract_model_ids_cyclonedx(output_path: Path) -> list[str]:
     """
     Extract model IDs from a CycloneDX JSON BOM.
-    Sources checked (in order):
-      1. bom.metadata.component.name
-      2. bom.components[*].name  (filtered to HF-style IDs)
-      3. bom.components[*].properties[name=="trusera:model_name"].value
-         (trusera --deep emits actual model IDs here, not in component.name)
+
+    Only components of ``type == "machine-learning-model"`` are considered:
+    data (datasets), framework, library and application components are never
+    model detections, whatever their names look like.
+
+    Sources checked on each model component (in order):
+      1. ``name`` when it is an HF-style ``org/name`` ID
+      2. ``group/name`` when ``group`` is set and the result is HF-style
+      3. property ``trusera:model_name`` (trusera --deep emits the real
+         model ID there, not in ``name``)
     """
     try:
         with open(output_path) as f:
             bom = json.load(f)
     except Exception:
         return []
+    if not isinstance(bom, dict):
+        return []
+
+    components = [(bom.get("metadata") or {}).get("component")]
+    components += bom.get("components") or []
 
     ids: list[str] = []
-    _collect_cdx_name(bom.get("metadata", {}).get("component", {}), ids)
-    for comp in bom.get("components", []):
+    for comp in components:
+        if not isinstance(comp, dict) or comp.get("type") != ML_MODEL_TYPE:
+            continue
         _collect_cdx_name(comp, ids)
-        for prop in comp.get("properties", []):
-            if prop.get("name") == "trusera:model_name":
-                val = prop.get("value", "").strip()
+        for prop in comp.get("properties") or []:
+            if isinstance(prop, dict) and prop.get("name") == "trusera:model_name":
+                val = str(prop.get("value", "")).strip()
                 if val:
                     ids.append(val)
 
+    return _deduplicate(ids)
+
+
+def extract_model_ids_cyclonedx_many(output_paths: list[Path]) -> list[str]:
+    """Union of model IDs across several BOM files (scan mode emits one per model)."""
+    ids: list[str] = []
+    for path in output_paths:
+        ids.extend(extract_model_ids_cyclonedx(path))
     return _deduplicate(ids)
 
 

@@ -1,33 +1,32 @@
 {
-  "_comment": "Ground truth for target-10-config (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
+  "schema_version": 2,
   "target": "target-10-config",
-  "target_path": "targets/target-10-config",
   "models": [
     {
       "id": "microsoft/phi-2",
-      "detectable": true,
-      "pattern": ".env HF_MODEL_ID",
-      "detectable_scope": "env_literal"
+      "scope": "env_literal",
+      "file": ".env",
+      "pattern": ".env HF_MODEL_ID"
     },
     {
       "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-      "detectable": true,
-      "pattern": ".env EMBEDDING_MODEL",
-      "detectable_scope": "env_literal"
+      "scope": "env_literal",
+      "file": ".env",
+      "pattern": ".env EMBEDDING_MODEL"
     },
     {
       "id": "cross-encoder/nli-deberta-v3-small",
-      "detectable": true,
-      "pattern": ".env RERANKER_MODEL",
-      "detectable_scope": "env_literal"
+      "scope": "env_literal",
+      "file": ".env",
+      "pattern": ".env RERANKER_MODEL"
     },
     {
       "id": "stabilityai/stable-diffusion-xl-base-1.0",
-      "detectable": true,
-      "pattern": "requirements.txt comment",
-      "detectable_scope": "requirements_comment"
+      "scope": "requirements_comment",
+      "file": "requirements.txt",
+      "pattern": "requirements.txt comment"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

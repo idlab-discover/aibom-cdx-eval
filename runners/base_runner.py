@@ -18,10 +18,18 @@ import time
 from pathlib import Path
 from typing import Any
 
-from constants import DETERMINISM_ENV, EVAL_ROOT
+from constants import (
+    DETERMINISM_ENV,
+    EC_SUCCESS_EMPTY,
+    EVAL_ROOT,
+    K_DETECTED_IDS,
+    K_ERROR_CLASS,
+)
 
+from scoring.score_discovery import score_discovery       # noqa: E402
 from scoring.score_performance import score_performance   # noqa: E402
 from scoring.score_reliability import score_reliability   # noqa: E402
+from scoring.utils import resolve_ground_truth_path       # noqa: E402
 
 
 @dataclasses.dataclass
@@ -43,6 +51,7 @@ class RunResult:
     raw_output_path: str | None
     error_message: str | None
     scores: dict[str, Any]
+    total_wall_seconds: float = 0.0
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -125,9 +134,26 @@ class BaseRunner(abc.ABC):
         Called unconditionally after each run.
         """
 
+    def post_run(self) -> None:
+        """Called once after the last job of a run (e.g. to undo local patches)."""
+
     def get_version(self) -> tuple[str, str]:
-        """Return (version_string, commit_hash). Override per tool."""
-        return "unknown", "unknown"
+        """Return (version_string, commit). Default: the tool checkout's package
+        version and git commit (``-dirty`` when tracked files are modified)."""
+        path = self.working_dir()
+        return package_version(path), git_commit(path)
+
+    def baseline_command(self) -> list[str]:
+        """Cheap no-op invocation used to measure per-tool process start-up cost."""
+        return list(self.tool_config.get("entry", [])) + ["--help"]
+
+    # Tasks for which exit 0 + no output artifact is a valid empty result (zero
+    # detections) rather than a failure: scan tools that write nothing when they
+    # find nothing.
+    EMPTY_OUTPUT_TASKS: frozenset[str] = frozenset()
+
+    def empty_output_is_valid(self) -> bool:
+        return self.task_config["id"] in self.EMPTY_OUTPUT_TASKS
 
     def locate_output(self, output_dir: Path) -> Path | None:
         """Find the primary output file produced in output_dir."""
@@ -137,10 +163,31 @@ class BaseRunner(abc.ABC):
                 return matches[0]
         return None
 
+    # -- directory-based lookups (shared by run-time scoring and `eval rescore`) --
+
+    @classmethod
+    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str] | None:
+        """Model IDs the tool reported for a scan run; None if not a discovery tool."""
+        return None
+
+    @classmethod
+    def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
+        """CycloneDX files to score for T4 (default: every top-level JSON file)."""
+        return sorted(tool_output_dir.glob("*.json"))
+
+    def _discovery_scores(self, detected: list[str]) -> dict[str, Any]:
+        scores: dict[str, Any] = {K_DETECTED_IDS: detected}
+        gt_path = resolve_ground_truth_path(
+            self.task_config.get("current_dataset_ground_truth") or None, EVAL_ROOT
+        )
+        if gt_path and gt_path.exists():
+            scores.update(score_discovery(detected, gt_path))
+        return scores
+
     def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
         """
-        Score the tool output. Called only when success=True.
-        Subclasses delegate to scoring modules.
+        Score the tool output. Called when success=True (``output_path`` is None
+        only for a valid empty scan result). ``self.tool_output_dir`` is set.
         """
         return {}
 
@@ -164,9 +211,11 @@ class BaseRunner(abc.ABC):
         capture timing + memory, retry on failure, and return a RunResult.
         """
         if max_retries is None:
-            max_retries = self.tool_config.get("max_retries", self.MAX_RETRIES)
+            max_retries = int(self.tool_config.get("max_retries", self.MAX_RETRIES))
         if timeout is None:
-            timeout = self.tool_config.get("timeout_seconds", self.TIMEOUT)
+            timeout = int(self.tool_config.get("timeout_seconds", self.TIMEOUT))
+        retry_delay = float(self.tool_config.get("retry_delay_seconds", self.RETRY_DELAY))
+        retry_on_timeout = bool(self.tool_config.get("retry_on_timeout", False))
 
         # Per-input output directory to prevent collisions across model IDs.
         # Layout: results/runs/<run_id>/<tool>/<task>/<dataset>/<input_slug>/rNN/
@@ -183,6 +232,7 @@ class BaseRunner(abc.ABC):
 
         tool_output_dir = output_dir / "tool_output"
         tool_output_dir.mkdir(exist_ok=True)
+        self.tool_output_dir = tool_output_dir
 
         # Build subprocess environment
         run_env = dict(os.environ)
@@ -193,8 +243,8 @@ class BaseRunner(abc.ABC):
         run_env["PYTHONHASHSEED"] = DETERMINISM_ENV["PYTHONHASHSEED"]
         run_env.setdefault("TRANSFORMERS_SEED", DETERMINISM_ENV["TRANSFORMERS_SEED"])
 
+        version, commit = self.get_version()   # before pre_run: reflects the pristine checkout
         self.pre_run()
-        version, commit = self.get_version()
         cmd = self.build_command(input_spec, tool_output_dir, run_env)
 
         stdout_log = output_dir / "stdout.log"
@@ -213,6 +263,7 @@ class BaseRunner(abc.ABC):
         error_msg: str | None = None
         peak_memory_mb: float | None = None
         retries = 0
+        attempt_duration = 0.0
 
         for attempt in range(max_retries + 1):
             if attempt > 0:
@@ -220,11 +271,12 @@ class BaseRunner(abc.ABC):
                 print(
                     f"  ↻  Retry {attempt}/{max_retries} — "
                     f"{self._tool_id} | {input_spec} "
-                    f"(exit {exit_code}, waiting {self.RETRY_DELAY}s…)",
+                    f"(exit {exit_code}, waiting {retry_delay:g}s…)",
                     flush=True,
                 )
-                time.sleep(self.RETRY_DELAY)
+                time.sleep(retry_delay)
 
+            t0 = time.monotonic()
             try:
                 with open(stdout_log, "w") as fout, open(stderr_log, "w") as ferr:
                     proc = subprocess.run(
@@ -235,6 +287,7 @@ class BaseRunner(abc.ABC):
                         stderr=ferr,
                         timeout=timeout,
                     )
+                attempt_duration = time.monotonic() - t0
                 exit_code = proc.returncode
                 exit_code = self.adjust_exit_code(exit_code, stdout_log, stderr_log)
 
@@ -247,21 +300,29 @@ class BaseRunner(abc.ABC):
                 error_msg = _build_error_message(stderr_log, stdout_log)
 
             except subprocess.TimeoutExpired:
+                attempt_duration = time.monotonic() - t0
                 exit_code = -9
                 error_msg = f"Timed out after {timeout}s (attempt {attempt + 1})"
+                if retry_on_timeout and attempt < max_retries:
+                    continue
                 break
             except Exception as exc:
+                attempt_duration = time.monotonic() - t0
                 exit_code = -1
                 error_msg = str(exc)
                 break
 
         ts_end = datetime.datetime.now(datetime.timezone.utc)
-        duration = (ts_end - ts_start).total_seconds()
+        # duration = the final attempt only (retries and their waits excluded);
+        # total_wall_seconds keeps the whole span for transparency.
+        duration = attempt_duration
+        total_wall = (ts_end - ts_start).total_seconds()
         success = exit_code == 0
+        empty_result = False
 
         raw_output_path: str | None = None
         scores: dict[str, Any] = {}
-        stderr_text = _read_tail(stderr_log, 2000)
+        stderr_text = _read_tail(stderr_log, 2000) + "\n" + _read_tail(stdout_log, 2000)
 
         if success:
             found = self.locate_output(tool_output_dir)
@@ -275,6 +336,10 @@ class BaseRunner(abc.ABC):
                 scores.update(perf)
                 # Tool-specific scores (discovery, cdx, etc.)
                 scores.update(self.score(found, input_spec))
+            elif self.empty_output_is_valid():
+                # Scan tool that found nothing: a valid result with zero detections.
+                empty_result = True
+                scores.update(self.score(None, input_spec))
             else:
                 success = False
                 error_msg = (
@@ -290,6 +355,8 @@ class BaseRunner(abc.ABC):
             Path(EVAL_ROOT / raw_output_path) if raw_output_path else None
         )
         rel = score_reliability(exit_code, stderr_text, found_path, success)
+        if empty_result:
+            rel[K_ERROR_CLASS] = EC_SUCCESS_EMPTY
         scores.update(rel)
 
         # Unconditional cleanup of tool side-effect files
@@ -316,12 +383,77 @@ class BaseRunner(abc.ABC):
             raw_output_path=raw_output_path,
             error_message=error_msg,
             scores=scores,
+            total_wall_seconds=total_wall,
         )
 
 
 # ------------------------------------------------------------------ #
 # Private helpers                                                      #
 # ------------------------------------------------------------------ #
+
+_VERSION_CACHE: dict[str, str] = {}
+
+
+def package_version(path: Path) -> str:
+    """Version from the checkout's pyproject.toml ([project] or [tool.poetry])."""
+    key = f"pkg:{path}"
+    if key not in _VERSION_CACHE:
+        version = "unknown"
+        try:
+            import tomllib
+
+            data = tomllib.loads((path / "pyproject.toml").read_text())
+            version = str(
+                (data.get("project") or {}).get("version")
+                or ((data.get("tool") or {}).get("poetry") or {}).get("version")
+                or _dynamic_version(path, data)
+                or "unknown"
+            )
+        except Exception:
+            pass
+        _VERSION_CACHE[key] = version
+    return _VERSION_CACHE[key]
+
+
+def _dynamic_version(path: Path, pyproject: dict) -> str | None:
+    """Version of a package with ``dynamic = ["version"]``: read ``__version__``
+    from the file named in ``[tool.hatch.version]`` or from ``src/*/__init__.py``."""
+    candidates: list[Path] = []
+    hatch_path = (((pyproject.get("tool") or {}).get("hatch") or {}).get("version") or {}).get("path")
+    if hatch_path:
+        candidates.append(path / hatch_path)
+    candidates += sorted(path.glob("src/*/__init__.py"))
+    for f in candidates:
+        try:
+            m = re.search(r"""__version__\s*=\s*["']([^"']+)["']""", f.read_text())
+        except OSError:
+            continue
+        if m:
+            return m.group(1)
+    return None
+
+
+def git_commit(path: Path) -> str:
+    """Short commit of the git checkout containing ``path`` (+ ``-dirty`` if
+    tracked files are modified); ``unknown`` if it is not a git checkout."""
+    key = f"git:{path}"
+    if key not in _VERSION_CACHE:
+        commit = "unknown"
+        try:
+            head = subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--short=12", "HEAD"],
+                capture_output=True, text=True, timeout=10, check=True,
+            ).stdout.strip()
+            dirty = subprocess.run(
+                ["git", "-C", str(path), "status", "--porcelain", "--untracked-files=no"],
+                capture_output=True, text=True, timeout=10, check=True,
+            ).stdout.strip()
+            commit = head + ("-dirty" if dirty else "")
+        except Exception:
+            pass
+        _VERSION_CACHE[key] = commit
+    return _VERSION_CACHE[key]
+
 
 def _parse_gnu_time_memory(time_file: Path) -> float | None:
     """Parse peak RSS (in MB) from /usr/bin/time -v -o <file> output."""

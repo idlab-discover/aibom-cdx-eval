@@ -1,136 +1,127 @@
 """
-score_discovery.py — precision/recall/F1 scorer for source code scanning tasks (T2).
+score_discovery.py — T3 model-discovery scoring (precision / recall / F1).
 
-Compares detected model IDs against the annotated ground truth for a target directory.
-Supports both exact match and fuzzy (model-name-only) fallback matching.
+ONE matching function, used both when a run is scored and when the run is
+re-scored at aggregation time from the stored ``detected_ids``.
+
+Matching rules (org-aware, case-insensitive):
+  1. A detection matches a ground-truth entry when it equals the entry's ``id``
+     or one of its ``aliases`` (the literal as written in the source).
+  2. A name-only match is allowed ONLY when the ground-truth id itself has no
+     org (e.g. ``gpt-4o``): ``openai/gpt-4o`` then matches ``gpt-4o``.  A
+     detection without an org never matches a ground-truth id that has one.
+  3. Each ground-truth entry is consumed once; repeated detections of it are
+     ignored (not a second TP, not an FP).
+  4. Detections that match a ``neutral`` entry are ignored (not TP, not FP).
+  5. Every remaining detection is a false positive — including datasets,
+     base models the source does not reference, and anything unlisted.
 """
 
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
-def _normalize_model_id(model_id: str) -> str:
-    """Lowercase and strip the org/ prefix for fuzzy matching."""
-    return model_id.lower().split("/")[-1] if "/" in model_id else model_id.lower()
+from scoring.ground_truth import GroundTruth, GTEntry, canon, load_ground_truth
 
 
-def score_discovery(
-    detected_ids: list[str],
-    ground_truth_path: Path,
-) -> dict[str, Any]:
-    """
-    Compute precision, recall, and F1 for source code scanning.
+@dataclass(frozen=True)
+class MatchResult:
+    tp_ids: tuple[str, ...]      # ground-truth ids that were found
+    fn_ids: tuple[str, ...]      # ground-truth ids that were missed
+    fp_ids: tuple[str, ...]      # detections matching nothing (as reported)
+    neutral_ids: tuple[str, ...]  # detections ignored via the neutral list
+    scope_of: dict[str, str]     # ground-truth id -> scope (pattern class)
 
-    Returns two sets of metrics:
-    - Full metrics (all detectable=True models in ground truth).
-    - "python_literal" scoped metrics (only models whose detectable_scope ==
-      "python_literal"), representing the common-denominator case where all
-      scanners can reasonably compete.
 
-    FP is always computed against the full ground truth: a model that exists in
-    any scope is never a false positive, even if it falls outside the scope
-    being measured.
-    """
-    try:
-        with open(ground_truth_path) as f:
-            gt_data = json.load(f)
-    except Exception:
-        return _empty_scores()
+def _name_only(model_id: str) -> str:
+    return model_id.rsplit("/", 1)[-1]
 
-    gt_models: list[dict] = gt_data.get("models", [])
 
-    # Full ground truth (all detectable=True)
-    full_scores = _compute_scores(
-        detected_ids,
-        gt_all={m["id"] for m in gt_models if m.get("detectable", True)},
-        gt_subset={m["id"] for m in gt_models if m.get("detectable", True)},
+def _find_entry(det: str, entries: list[GTEntry]) -> GTEntry | None:
+    """First entry matching detection ``det`` (already canonicalised)."""
+    for e in entries:
+        if det in e.keys:
+            return e
+    if "/" in det:
+        name = _name_only(det)
+        for e in entries:
+            if any("/" not in k and k == name for k in e.keys):
+                return e
+    return None
+
+
+def match_detections(detected_ids: list[str], gt: GroundTruth) -> MatchResult:
+    counted = list(gt.models)
+    neutral = list(gt.neutral)
+    found: dict[str, GTEntry] = {}
+    fp: list[str] = []
+    neutral_hits: list[str] = []
+    seen: set[str] = set()
+
+    for raw in detected_ids:
+        det = canon(raw)
+        if not det or det in seen:
+            continue
+        seen.add(det)
+        entry = _find_entry(det, counted)
+        if entry is not None:
+            found.setdefault(entry.id, entry)   # rule 3: consumed once
+            continue
+        n_entry = _find_entry(det, neutral)
+        if n_entry is not None:
+            neutral_hits.append(raw)
+            continue
+        fp.append(raw)
+
+    return MatchResult(
+        tp_ids=tuple(e.id for e in counted if e.id in found),
+        fn_ids=tuple(e.id for e in counted if e.id not in found),
+        fp_ids=tuple(fp),
+        neutral_ids=tuple(neutral_hits),
+        scope_of={e.id: e.scope for e in counted},
     )
 
-    # Python-literal-only subset ground truth
-    py_scores = _compute_scores(
-        detected_ids,
-        gt_all={m["id"] for m in gt_models if m.get("detectable", True)},
-        gt_subset={
-            m["id"] for m in gt_models
-            if m.get("detectable", True)
-            and m.get("detectable_scope") == "python_literal"
-        },
-    )
 
+def prf(tp: int, fp: int, fn: int) -> dict[str, float | None]:
+    """Precision/recall/F1 with the convention that undefined precision → None.
+
+    F1 is 0.0 whenever TP is 0 and the ground truth is non-empty, so a scan
+    that finds nothing scores 0, never "undefined".
+    """
+    precision = tp / (tp + fp) if (tp + fp) > 0 else None
+    recall = tp / (tp + fn) if (tp + fn) > 0 else None
+    if tp > 0 and precision is not None and recall is not None:
+        f1: float | None = 2 * precision * recall / (precision + recall)
+    else:
+        f1 = 0.0 if (tp + fn) > 0 else None
     return {
-        "precision":    full_scores["precision"],
-        "recall":       full_scores["recall"],
-        "f1":           full_scores["f1"],
-        "tp":           full_scores["tp"],
-        "fp":           full_scores["fp"],
-        "fn":           full_scores["fn"],
-        "precision_py": py_scores["precision"],
-        "recall_py":    py_scores["recall"],
-        "f1_py":        py_scores["f1"],
-        "tp_py":        py_scores["tp"],
-        "fp_py":        py_scores["fp"],
-        "fn_py":        py_scores["fn"],
+        "precision": None if precision is None else round(precision, 4),
+        "recall": None if recall is None else round(recall, 4),
+        "f1": None if f1 is None else round(f1, 4),
     }
 
 
-def _compute_scores(
-    detected_ids: list[str],
-    gt_all: set[str],
-    gt_subset: set[str],
-) -> dict[str, Any]:
-    """Core TP/FP/FN computation.
+def score_discovery(detected_ids: list[str], ground_truth_path: Path) -> dict[str, Any]:
+    """Score one run's detections against one target's ground truth."""
+    try:
+        gt = load_ground_truth(ground_truth_path)
+    except Exception:
+        return _empty_scores()
 
-    TP is counted against gt_subset (the scope being measured).
-    FP is counted against gt_all (any correctly detected model is never a FP).
-    FN is the gap between gt_subset and what was detected.
-    """
-    gt_subset_lower: set[str] = {_normalize_model_id(m) for m in gt_subset}
-    gt_all_lower: set[str] = {_normalize_model_id(m) for m in gt_all}
-
-    detected_set: set[str] = set(detected_ids)
-    detected_lower: set[str] = {_normalize_model_id(d) for d in detected_ids}
-
-    # True positives against the measured subset
-    tp_exact = detected_set & gt_subset
-    tp_fuzzy_lower = (
-        (detected_lower - {_normalize_model_id(d) for d in tp_exact}) & gt_subset_lower
-    )
-    tp = len(tp_exact) + len(tp_fuzzy_lower)
-
-    # False positives: detected but not in the FULL ground truth (any scope)
-    matched_in_all_exact = detected_set & gt_all
-    matched_in_all_fuzzy = (
-        (detected_lower - {_normalize_model_id(d) for d in matched_in_all_exact})
-        & gt_all_lower
-    )
-    correctly_detected = len(matched_in_all_exact) + len(matched_in_all_fuzzy)
-    fp = max(len(detected_ids) - correctly_detected, 0)
-
-    fn = max(len(gt_subset) - tp, 0)
-
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1        = (
-        2 * precision * recall / (precision + recall)
-        if (precision + recall) > 0 else 0.0
-    )
-
+    m = match_detections(detected_ids, gt)
+    tp, fp, fn = len(m.tp_ids), len(m.fp_ids), len(m.fn_ids)
     return {
-        "precision": round(precision, 4),
-        "recall":    round(recall, 4),
-        "f1":        round(f1, 4),
-        "tp":        tp,
-        "fp":        fp,
-        "fn":        fn,
+        **prf(tp, fp, fn),
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tp_ids": list(m.tp_ids),
+        "fn_ids": list(m.fn_ids),
+        "fp_ids": list(m.fp_ids),
     }
 
 
 def _empty_scores() -> dict[str, Any]:
-    empty: dict[str, Any] = {}
-    for suffix in ("", "_py"):
-        for k in ("precision", "recall", "f1", "tp", "fp", "fn"):
-            empty[k + suffix] = None
-    return empty
+    return {k: None for k in ("precision", "recall", "f1", "tp", "fp", "fn")}

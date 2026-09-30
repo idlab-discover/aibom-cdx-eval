@@ -1,45 +1,47 @@
 {
-  "_comment": "Ground truth for target-08-mixed (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
+  "schema_version": 2,
   "target": "target-08-mixed",
-  "target_path": "targets/target-08-mixed",
   "models": [
     {
       "id": "meta-llama/Meta-Llama-3-8B-Instruct",
-      "detectable": true,
-      "pattern": "REGISTRY dict + YAML + Dockerfile",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "backend/model_registry.py",
+      "pattern": "REGISTRY dict + YAML + Dockerfile"
     },
     {
       "id": "sentence-transformers/all-MiniLM-L6-v2",
-      "detectable": true,
-      "pattern": "REGISTRY dict + YAML",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "backend/model_registry.py",
+      "pattern": "REGISTRY dict + YAML"
     },
     {
       "id": "cross-encoder/ms-marco-MiniLM-L-12-v2",
-      "detectable": true,
+      "scope": "python_variable",
+      "file": "backend/model_registry.py",
       "pattern": "REGISTRY dict",
-      "detectable_scope": "python_variable"
+      "aliases": [
+        "cross-encoder/ms-marco-MiniLM-L12-v2"
+      ]
     },
     {
       "id": "openai/clip-vit-base-patch32",
-      "detectable": true,
-      "pattern": "REGISTRY dict",
-      "detectable_scope": "python_variable"
+      "scope": "python_variable",
+      "file": "backend/model_registry.py",
+      "pattern": "REGISTRY dict"
     },
     {
       "id": "Xenova/gpt2",
-      "detectable": true,
-      "pattern": "TypeScript const",
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "frontend/config.ts",
+      "pattern": "TypeScript const"
     },
     {
       "id": "Xenova/all-MiniLM-L6-v2",
-      "detectable": true,
-      "pattern": "TypeScript const",
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "frontend/config.ts",
+      "pattern": "TypeScript const"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

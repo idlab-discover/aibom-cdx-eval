@@ -1,313 +1,230 @@
 {
-  "_comment": "Ground truth for target-3 — rich multi-language, multi-file fixture.",
-  "_method": "Manual annotation from all source files. Includes Python, TypeScript, YAML, JSON, Shell, Dockerfile, Markdown, Jupyter.",
-  "_not_detectable": [
-    "meta-llama/Llama-3.1-70B-Instruct (train.py: variable indirection MODEL_ID=...)",
-    "meta-llama/Llama-3.1-{variant} (train.py: f-string interpolation)",
-    "facebook/opt-1.3b (inference.ts: const MODEL=...; variable indirection)",
-    "google/flan-t5-xxl (notebook cell 8: BASELINE=...; variable indirection)",
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B (Dockerfile: ARG expansion — not detectable)",
-    "distilbert-base-uncased (model_config.json: no org/ prefix — single-segment name)"
-  ],
+  "schema_version": 2,
   "target": "target-05-mixed",
-  "target_path": "targets/target-05-mixed",
   "models": [
     {
       "id": "meta-llama/Llama-3.1-8B",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "config/adapter_config.json",
-        "config/axolotl.yaml",
-        "scripts/download.sh",
-        "README.md",
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "README.md"
     },
     {
       "id": "mistralai/Mistral-7B-v0.1",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "notebooks/exploration.ipynb"
     },
     {
       "id": "Qwen/Qwen2.5-7B-Instruct",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "config/trl_config.yaml",
-        "notebooks/exploration.ipynb",
-        "README.md"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "README.md"
     },
     {
       "id": "google/flan-t5-xxl",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "src/evaluate_models.py",
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "notebooks/exploration.ipynb"
     },
     {
       "id": "facebook/opt-1.3b",
-      "detectable": true,
-      "files": [
-        "src/train.py"
-      ],
-      "note": "Detectable in train.py via pipeline(); variable indirection in inference.ts is NOT detectable",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/inference.ts"
     },
     {
       "id": "facebook/bart-large-mnli",
-      "detectable": true,
-      "files": [
-        "src/train.py"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/train.py"
     },
     {
       "id": "meta-llama/Llama-3.1-8B-Instruct",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "src/inference.ts",
-        "scripts/Dockerfile"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "scripts/Dockerfile"
     },
     {
       "id": "timdettmers/guanaco-33b-merged",
-      "detectable": true,
-      "files": [
-        "src/train.py"
-      ],
-      "pattern": "hf_hub_download(repo_id=...)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/train.py",
+      "pattern": "hf_hub_download(repo_id=...)"
     },
     {
       "id": "BAAI/bge-large-en-v1.5",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "scripts/download.sh",
-        "README.md",
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "README.md"
     },
     {
       "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "notebooks/exploration.ipynb",
+      "aliases": [
+        "cross-encoder/ms-marco-MiniLM-L6-v2"
+      ]
     },
     {
       "id": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "scripts/download.sh",
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "notebooks/exploration.ipynb"
     },
     {
       "id": "google/gemma-2-9b-it",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "scripts/Dockerfile",
-        "scripts/download.sh",
-        "README.md"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "README.md"
     },
     {
       "id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-      "detectable": true,
-      "files": [
-        "src/train.py",
-        "scripts/download.sh"
-      ],
-      "note": "Dockerfile version via ARG expansion is NOT detectable",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "notebooks/exploration.ipynb"
     },
     {
       "id": "microsoft/phi-4",
-      "detectable": true,
-      "files": [
-        "src/train.py"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/train.py"
     },
     {
       "id": "tiiuae/falcon-7b-instruct",
-      "detectable": true,
-      "files": [
-        "src/train.py"
-      ],
-      "detectable_scope": "python_literal"
-    },
-    {
-      "id": "lvwerra/stack-exchange-paired",
-      "detectable": true,
-      "files": [
-        "src/evaluate_models.py"
-      ],
-      "pattern": "evaluate.load(repo_id)",
-      "detectable_scope": "python_literal"
-    },
-    {
-      "id": "huggingface-course/mse-metric",
-      "detectable": true,
-      "files": [
-        "src/evaluate_models.py"
-      ],
-      "pattern": "evaluate.load(repo_id)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/train.py"
     },
     {
       "id": "meta-llama/Llama-3.1-70B-Instruct",
-      "detectable": true,
-      "files": [
-        "src/evaluate_models.py"
-      ],
-      "pattern": "InferenceClient(model=...)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/evaluate_models.py",
+      "pattern": "InferenceClient(model=...)"
     },
     {
       "id": "HuggingFaceH4/zephyr-7b-beta",
-      "detectable": true,
-      "files": [
-        "src/evaluate_models.py"
-      ],
-      "pattern": "InferenceClient(model=...)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/evaluate_models.py",
+      "pattern": "InferenceClient(model=...)"
     },
     {
       "id": "mistralai/Mistral-7B-Instruct-v0.3",
-      "detectable": true,
-      "files": [
-        "src/evaluate_models.py",
-        "scripts/Dockerfile",
-        "scripts/download.sh",
-        "README.md",
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "python_literal"
-    },
-    {
-      "id": "my-org/my-fine-tuned-llama",
-      "detectable": true,
-      "files": [
-        "src/evaluate_models.py"
-      ],
-      "note": "Synthetic ID — will not resolve on HF Hub",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "README.md"
     },
     {
       "id": "stabilityai/stable-diffusion-xl-base-1.0",
-      "detectable": true,
-      "files": [
-        "src/evaluate_models.py",
-        "scripts/download.sh"
-      ],
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "scripts/download.sh"
     },
     {
       "id": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
-      "detectable": true,
-      "files": [
-        "src/inference.ts"
-      ],
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "src/inference.ts"
     },
     {
       "id": "Xenova/gpt2",
-      "detectable": true,
-      "files": [
-        "src/inference.ts"
-      ],
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "src/inference.ts"
     },
     {
       "id": "Xenova/bert-base-uncased",
-      "detectable": true,
-      "files": [
-        "src/inference.ts"
-      ],
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "src/inference.ts"
     },
     {
       "id": "Xenova/distilbert-base-uncased-finetuned-sst-2-english",
-      "detectable": true,
-      "files": [
-        "src/inference.ts"
-      ],
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "src/inference.ts"
     },
     {
       "id": "google/vit-base-patch16-224",
-      "detectable": true,
-      "files": [
-        "src/inference.ts"
-      ],
-      "detectable_scope": "js_literal"
-    },
-    {
-      "id": "my-org/llama-3.1-8b-axolotl-ft",
-      "detectable": true,
-      "files": [
-        "config/axolotl.yaml"
-      ],
-      "pattern": "hub_model_id key",
-      "detectable_scope": "yaml_literal"
+      "scope": "js_literal",
+      "file": "src/inference.ts"
     },
     {
       "id": "Qwen/Qwen2.5-72B-Instruct",
-      "detectable": true,
-      "files": [
-        "config/trl_config.yaml"
-      ],
-      "pattern": "teacher_model_name_or_path key",
-      "detectable_scope": "yaml_literal"
-    },
-    {
-      "id": "my-org/qwen2.5-7b-sft",
-      "detectable": true,
-      "files": [
-        "config/trl_config.yaml"
-      ],
-      "pattern": "hub_model_id key",
-      "detectable_scope": "yaml_literal"
-    },
-    {
-      "id": "my-org/llama-3.1-8b-arabic-sft",
-      "detectable": true,
-      "files": [
-        "README.md"
-      ],
-      "pattern": "YAML frontmatter model_id key",
-      "detectable_scope": "readme_literal"
+      "scope": "yaml_literal",
+      "file": "config/trl_config.yaml",
+      "pattern": "teacher_model_name_or_path key"
     },
     {
       "id": "dslim/bert-base-NER",
-      "detectable": true,
-      "files": [
-        "notebooks/exploration.ipynb"
-      ],
-      "detectable_scope": "notebook_literal"
+      "scope": "notebook_literal",
+      "file": "notebooks/exploration.ipynb"
     }
   ],
-  "datasets": []
+  "neutral": [
+    {
+      "id": "my-org/my-fine-tuned-llama",
+      "reason": "upload_file() destination repo, not a consumed model",
+      "file": "src/evaluate_models.py"
+    },
+    {
+      "id": "my-org/llama-3.1-8b-axolotl-ft",
+      "reason": "hub_model_id push target, not a consumed model",
+      "file": "config/axolotl.yaml"
+    },
+    {
+      "id": "my-org/qwen2.5-7b-sft",
+      "reason": "hub_model_id push target, not a consumed model",
+      "file": "config/trl_config.yaml"
+    },
+    {
+      "id": "my-org/llama-3.1-8b-arabic-sft",
+      "reason": "the project's own (placeholder-org) model, not resolvable on the Hub",
+      "file": "README.md"
+    },
+    {
+      "id": "Xenova/llama-3-8b",
+      "reason": "only reachable through a ternary over variables (indirect reference)",
+      "file": "src/inference.ts"
+    },
+    {
+      "id": "distilbert/distilbert-base-uncased",
+      "aliases": [
+        "distilbert-base-uncased"
+      ],
+      "reason": "legacy single-segment _name_or_path in a config file (provenance, not usage)",
+      "file": "config/model_config.json"
+    }
+  ],
+  "not_models": [
+    {
+      "id": "lvwerra/stack-exchange-paired",
+      "kind": "evaluate.load() module repo (dataset/metric), not a model",
+      "file": "src/evaluate_models.py"
+    },
+    {
+      "id": "huggingface-course/mse-metric",
+      "kind": "evaluate.load() module repo (metric Space), not a model",
+      "file": "src/evaluate_models.py"
+    },
+    {
+      "id": "HuggingFaceH4/ultrachat_200k",
+      "kind": "dataset",
+      "file": "config/trl_config.yaml"
+    },
+    {
+      "id": "tatsu-lab/alpaca",
+      "kind": "dataset",
+      "file": "config/axolotl.yaml"
+    },
+    {
+      "id": "Teacher/student",
+      "kind": "prose",
+      "file": "config/trl_config.yaml"
+    },
+    {
+      "id": "adapter-repo/name",
+      "kind": "prose",
+      "file": "src/train.py"
+    },
+    {
+      "id": "meta-llama/Llama-3",
+      "kind": "prose",
+      "file": "src/train.py"
+    },
+    {
+      "id": "org/model",
+      "kind": "prose",
+      "file": "src/inference.ts"
+    },
+    {
+      "id": "org/repo",
+      "kind": "prose",
+      "file": "src/evaluate_models.py"
+    },
+    {
+      "id": "single/double",
+      "kind": "prose",
+      "file": "src/train.py"
+    }
+  ]
 }

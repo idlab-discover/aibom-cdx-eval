@@ -1,27 +1,26 @@
 {
-  "_comment": "Ground truth for target-07-mixed (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
+  "schema_version": 2,
   "target": "target-07-mixed",
-  "target_path": "targets/target-07-mixed",
   "models": [
     {
       "id": "google/flan-t5-large",
-      "detectable": true,
-      "pattern": "Jupyter cell AutoModel.from_pretrained",
-      "detectable_scope": "notebook_literal"
+      "scope": "notebook_literal",
+      "file": "experiment.ipynb",
+      "pattern": "Jupyter cell AutoModel.from_pretrained"
     },
     {
       "id": "sentence-transformers/all-roberta-large-v1",
-      "detectable": true,
-      "pattern": "Jupyter cell SentenceTransformer",
-      "detectable_scope": "notebook_literal"
+      "scope": "notebook_literal",
+      "file": "experiment.ipynb",
+      "pattern": "Jupyter cell SentenceTransformer"
     },
     {
       "id": "stabilityai/stable-diffusion-2-1",
-      "detectable": true,
-      "pattern": "Jupyter cell DiffusionPipeline.from_pretrained",
-      "detectable_scope": "notebook_literal"
+      "scope": "notebook_literal",
+      "file": "experiment.ipynb",
+      "pattern": "Jupyter cell DiffusionPipeline.from_pretrained"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

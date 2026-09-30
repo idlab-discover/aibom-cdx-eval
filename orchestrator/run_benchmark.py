@@ -4,6 +4,7 @@ run_benchmark.py — main orchestration CLI for the aibomgen-cli evaluation fram
 Subcommands:
   run        Run all jobs on the current machine (sequential).
   status     Show status of the latest run (or a specific run via --run-id).
+  rescore    Recompute CycloneDX completeness from stored tool outputs.
   aggregate  Aggregate metrics for one run and generate figures.
 
 Quick start:
@@ -18,6 +19,9 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import statistics
+import subprocess
 import sys
 import time
 from itertools import groupby
@@ -35,7 +39,12 @@ from constants import (
     CONFIG_PATH,
     EVAL_ROOT,
     JOB_INDEX_FILENAME,
+    K_CDX_CONFORMANCE_VALID_V16,
+    LEGACY_TASK_IDS,
+    METRICS_FILENAME,
     RESULTS_DIR,
+    TASK_T1_T2,
+    TASK_T3_T4,
 )
 from orchestrator.run_id import latest_run_id
 
@@ -104,6 +113,17 @@ def cli() -> None:
     help="Repeat count for shared T1_T2 jobs.",
 )
 @click.option(
+    "--order",
+    type=click.Choice(["interleaved", "grouped"]),
+    default="interleaved",
+    show_default=True,
+    help=(
+        "interleaved: for each repeat round, every tool handles every model in turn, so tools "
+        "share the same network conditions and cache state. grouped: all jobs of one "
+        "tool/task first (legacy order)."
+    ),
+)
+@click.option(
     "--background",
     is_flag=True,
     default=False,
@@ -118,6 +138,7 @@ def run(
     limit: int | None,
     cooldown: float | None,
     n: int,
+    order: str,
     background: bool,
 ) -> None:
     """Run all jobs on the current machine (sequential)."""
@@ -147,6 +168,7 @@ def run(
         cooldown=cooldown,
         limit=limit,
         n=n,
+        order=order,
     )
 
 
@@ -187,6 +209,180 @@ def aggregate(run_id: str, results_dir: str) -> None:
     console.print(f"[green]Aggregated:[/green] {summary_path}")
 
 
+@cli.command("rescore")
+@click.option("--run-id", required=True, help="Run ID to re-score.")
+@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
+def rescore(run_id: str, results_dir: str) -> None:
+    """Recompute scores in stored metrics.json from the saved tool outputs
+    (no tool re-execution): T3 detections + discovery, multi-BOM CycloneDX
+    scores, error classes and legacy task names.  Run `aggregate` afterwards."""
+    from constants import K_DETECTED_IDS, K_ERROR_CLASS, EC_SUCCESS_EMPTY
+    from runners import REGISTRY
+    from runners.base_runner import _read_tail
+    from scoring.ground_truth import ground_truth_path
+    from scoring.score_cdx import score_cdx_paths
+    from scoring.score_discovery import score_discovery
+    from scoring.score_reliability import classify_error
+
+    run_dir = Path(results_dir) / run_id
+    if not run_dir.exists():
+        click.echo(f"Run directory not found: {run_dir}", err=True)
+        sys.exit(1)
+
+    updated = skipped = 0
+    for metrics_file in sorted(run_dir.rglob(METRICS_FILENAME)):
+        with open(metrics_file) as f:
+            record = json.load(f)
+        runner_cls = REGISTRY.get(record.get("tool", ""))
+        tool_output_dir = metrics_file.parent / "tool_output"
+        if runner_cls is None or not tool_output_dir.is_dir():
+            skipped += 1
+            continue
+
+        task = LEGACY_TASK_IDS.get(record.get("task", ""), record.get("task", ""))
+        record["task"] = task
+        scores = record.get("scores") or {}
+
+        # A scan that exited 0 without writing a file found nothing: valid, zero detections.
+        empty = (
+            task in runner_cls.EMPTY_OUTPUT_TASKS
+            and record.get("exit_code") == 0
+            and not any(tool_output_dir.iterdir())
+        )
+        if empty:
+            record["success"], record["error_message"] = True, None
+            scores[K_ERROR_CLASS] = EC_SUCCESS_EMPTY
+
+        cdx = score_cdx_paths(runner_cls.cdx_output_paths(tool_output_dir))
+        scores.update(cdx)
+
+        if task == TASK_T3_T4:
+            detected = runner_cls.detections_from_output_dir(tool_output_dir)
+            gt_path = ground_truth_path(record["dataset"])
+            if detected is not None:
+                scores[K_DETECTED_IDS] = detected
+                if gt_path.exists():
+                    scores.update(score_discovery(detected, gt_path))
+
+        if not record.get("success") and not empty:
+            tail = _read_tail(metrics_file.parent / "stderr.log", 2000) + "\n" + _read_tail(
+                metrics_file.parent / "stdout.log", 2000)
+            scores[K_ERROR_CLASS] = classify_error(record.get("exit_code", -1), tail, None, False)
+
+        record["scores"] = scores
+        with open(metrics_file, "w") as f:
+            json.dump(record, f, indent=2)
+        updated += 1
+
+    console.print(f"[green]Re-scored[/green] {updated} records ({skipped} skipped).")
+
+
+def _git_head(path: Path) -> str:
+    from runners.base_runner import git_commit
+
+    return git_commit(path)
+
+
+def _write_run_meta(
+    run_dir: Path,
+    run_id: str,
+    cfg: dict,
+    jobs: list,
+    order: str,
+    repeats: int,
+    limit: int | None,
+) -> None:
+    """Write run_meta.json once per run: tool versions/commits, environment and
+    per-tool process start-up baselines.  A resumed run keeps its original file."""
+    import datetime
+
+    meta_path = run_dir / "run_meta.json"
+    if meta_path.exists() or not jobs:
+        return
+
+    from runners import REGISTRY
+
+    tools: dict[str, dict] = {}
+    baselines: dict[str, dict] = {}
+    samples_n = int((cfg.get("run") or {}).get("baseline_samples", 5))
+    seen: set[str] = set()
+    for job in jobs:
+        tool_id = job["tool"]
+        if tool_id in seen or tool_id not in REGISTRY:
+            continue
+        seen.add(tool_id)
+        runner = REGISTRY[tool_id](job["tool_config"], job["task_config"])
+        version, commit = runner.get_version()
+        tools[tool_id] = {"version": version, "commit": commit}
+        baselines[tool_id] = _measure_baseline(runner, samples_n)
+
+    meta = {
+        "run_id": run_id,
+        "created": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "framework_commit": _git_head(EVAL_ROOT),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "host": platform.node(),
+        "cpu_count": os.cpu_count(),
+        "order": order,
+        "repeats": repeats,
+        "limit": limit,
+        "n_jobs": len(jobs),
+        "tools": tools,
+        "baselines": baselines,
+    }
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+
+def _measure_baseline(runner, samples_n: int) -> dict:
+    """Time a no-op invocation (``--help``/``--version``) of a tool.
+
+    Approximates the fixed process start-up cost (e.g. ``uv run`` + interpreter
+    + imports) that every real job of that tool also pays.  One warm-up call is
+    discarded; the median of ``samples_n`` calls is reported.
+    """
+    cmd = runner.baseline_command()
+    samples: list[float] = []
+    exit_codes: list[int] = []
+    for i in range(samples_n + 1):
+        t0 = time.monotonic()
+        try:
+            proc = subprocess.run(
+                cmd, cwd=str(runner.working_dir()), env=dict(os.environ),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300,
+            )
+            code = proc.returncode
+        except Exception:
+            code = -1
+        elapsed = time.monotonic() - t0
+        if i > 0:                       # discard the warm-up call
+            samples.append(round(elapsed, 4))
+            exit_codes.append(code)
+    return {
+        "command": cmd,
+        "samples": samples,
+        "exit_codes": exit_codes,
+        "median_seconds": round(statistics.median(samples), 4) if samples else None,
+    }
+
+
+def _run_post_hooks(jobs: list) -> None:
+    """Give each runner a chance to undo local patches after the run."""
+    from runners import REGISTRY
+
+    done: set[str] = set()
+    for job in jobs:
+        tool_id = job["tool"]
+        if tool_id in done or tool_id not in REGISTRY:
+            continue
+        done.add(tool_id)
+        try:
+            REGISTRY[tool_id](job["tool_config"], job["task_config"]).post_run()
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]post_run failed for {tool_id}: {exc}[/yellow]")
+
+
 def _run_once(
     run_id: str,
     results_dir: Path,
@@ -197,6 +393,7 @@ def _run_once(
     cooldown: float | None,
     limit: int | None,
     n: int,
+    order: str = "interleaved",
 ) -> None:
     from orchestrator.checkpoint import Checkpoint
 
@@ -209,10 +406,12 @@ def _run_once(
         task_filter=tasks,
         dataset_limit=limit,
         n=n,
+        order=order,
     )
 
     run_dir = results_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    _write_run_meta(run_dir, run_id, cfg, jobs, order=order, repeats=n, limit=limit)
 
     with open(run_dir / JOB_INDEX_FILENAME, "w") as f:
         json.dump(jobs, f, indent=2)
@@ -244,13 +443,13 @@ def _run_once(
     inter_group_wait = int((cooldown if cooldown is not None else 5.0) * 60)
 
     groups = [
-        ((tool, task), list(grp_jobs))
-        for (tool, task), grp_jobs in groupby(pending, key=lambda j: (j["tool"], j["task"]))
+        (group, list(grp_jobs))
+        for group, grp_jobs in groupby(pending, key=lambda j: j["group"])
     ]
 
-    for group_idx, ((tool, task), group_jobs) in enumerate(groups):
+    for group_idx, (group, group_jobs) in enumerate(groups):
         console.print(
-            f"\n[bold cyan]-- {tool} / {task}[/bold cyan] "
+            f"\n[bold cyan]-- {group}[/bold cyan] "
             f"[dim]({len(group_jobs)} job(s))[/dim]"
         )
         for job in group_jobs:
@@ -282,6 +481,7 @@ def _run_once(
         if group_idx < len(groups) - 1:
             _wait_between_groups(console, inter_group_wait)
 
+    _run_post_hooks(jobs)
     console.print(
         f"\n[bold]Done:[/bold] {done} succeeded, {failed} failed, {skipped} skipped."
     )
@@ -292,14 +492,19 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
+# Keys of config.yaml `run:` that every runner receives (a tool block may override them).
+_RUN_DEFAULTS_FOR_RUNNERS = ("max_retries", "retry_delay_seconds", "timeout_seconds", "retry_on_timeout")
+
+
 def _build_jobs(
     cfg: dict,
     tool_filter: str | None,
     task_filter: str | None,
     dataset_limit: int | None,
     n: int,
+    order: str = "interleaved",
 ) -> list[JobSpec]:
-    """Build flat job list with repeat expansion for T1_T2."""
+    """Build the flat job list (repeats expand T1_T2 only) in execution order."""
     tool_ids = set(tool_filter.split(",")) if tool_filter else None
     task_ids = set(task_filter.split(",")) if task_filter else None
 
@@ -307,8 +512,11 @@ def _build_jobs(
     tasks_cfg = cfg.get("tasks", {})
     tools_cfg = cfg.get("tools", {})
     hf_token_env = cfg.get("hf", {}).get("token_env", "HF_TOKEN")
+    run_defaults = {
+        k: v for k, v in (cfg.get("run") or {}).items() if k in _RUN_DEFAULTS_FOR_RUNNERS
+    }
 
-    for tool_id, tool_cfg in tools_cfg.items():
+    for tool_idx, (tool_id, tool_cfg) in enumerate(tools_cfg.items()):
         if tool_ids and tool_id not in tool_ids:
             continue
         if tool_cfg.get("optional") and not tool_cfg.get("tasks"):
@@ -322,10 +530,10 @@ def _build_jobs(
                 continue
 
             repeat_count = 1
-            if task_id == "T1_T2":
+            if task_id == TASK_T1_T2:
                 repeat_count = n
 
-            for dataset in task_cfg.get("datasets", []):
+            for dataset_idx, dataset in enumerate(task_cfg.get("datasets", [])):
                 dataset_id = dataset["id"]
                 dataset_type = dataset.get("type", "source-dir")
                 ground_truth = dataset.get("ground_truth", "")
@@ -339,10 +547,20 @@ def _build_jobs(
                         gt_path = EVAL_ROOT / gt_path
                     gt_resolved = str(gt_path)
 
-                for item in input_items:
+                for input_idx, item in enumerate(input_items):
                     for repeat_index in range(1, repeat_count + 1):
+                        block = 0 if task_id == TASK_T1_T2 else 1
+                        if order == "interleaved":
+                            # one round = every tool over every input, then the next repeat
+                            group = f"{task_id} / round {repeat_index}"
+                            sort_key = (block, repeat_index, dataset_idx, input_idx, tool_idx)
+                        else:
+                            group = f"{tool_id} / {task_id}"
+                            sort_key = (tool_idx, block, dataset_idx, input_idx, repeat_index)
                         jobs.append(
                             {
+                                "group": group,
+                                "_sort": sort_key,
                                 "tool": tool_id,
                                 "task": task_id,
                                 "dataset": dataset_id,
@@ -351,6 +569,7 @@ def _build_jobs(
                                 "ground_truth": gt_resolved,
                                 "hf_token_env": hf_token_env,
                                 "tool_config": {
+                                    **run_defaults,
                                     **tool_cfg,
                                     "path": str(_resolve_tool_path(tool_cfg)),
                                 },
@@ -362,6 +581,9 @@ def _build_jobs(
                             }
                         )
 
+    jobs.sort(key=lambda j: j["_sort"])
+    for j in jobs:
+        del j["_sort"]
     return jobs
 
 

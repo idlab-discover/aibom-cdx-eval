@@ -1,69 +1,71 @@
 {
-  "_comment": "Ground truth for target-1. Source: aibomgen-cli/targets/target-1/src/use_model.py",
-  "_method": "Manual annotation from source — mixed from_pretrained and constructor-style model calls.",
+  "schema_version": 2,
   "target": "target-01-python",
-  "target_path": "targets/target-01-python",
   "models": [
     {
       "id": "google-bert/bert-base-uncased",
-      "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "AutoModel.from_pretrained"
     },
     {
       "id": "facebook/opt-1.3b",
-      "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "AutoModel.from_pretrained"
     },
     {
       "id": "distilbert/distilgpt2",
-      "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "AutoModel.from_pretrained"
     },
     {
       "id": "openai-community/gpt2",
-      "detectable": true,
-      "pattern": "AutoTokenizer.from_pretrained",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "AutoTokenizer.from_pretrained"
     },
     {
       "id": "EMBO/vicreg_our",
-      "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "AutoModel.from_pretrained"
     },
     {
       "id": "almanach/Gaperon-1125-24B-SFT",
-      "detectable": true,
-      "pattern": "ChatOpenAI(model=)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "ChatOpenAI(model=)"
     },
     {
       "id": "google/medgemma-4b-it",
-      "detectable": true,
-      "pattern": "OpenAI(\"...\")",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "OpenAI(\"...\")"
     },
     {
       "id": "google/medgemma-27b-text-it",
-      "detectable": true,
-      "pattern": "ChatAnthropic(model=)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "ChatAnthropic(model=)"
     },
     {
       "id": "inceptionai/jais-adapted-70b",
-      "detectable": true,
+      "scope": "python_literal",
+      "file": "src/use_model.py",
       "pattern": "HuggingFaceHub(model_name=)",
-      "detectable_scope": "python_literal"
+      "aliases": [
+        "inception42/jais-adapted-70b"
+      ]
     },
     {
       "id": "Aleph-Alpha/llama-3_1-70b-tfree-hat-sft",
-      "detectable": true,
-      "pattern": "Ollama(model=)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "Ollama(model=)"
     }
   ],
-  "datasets": []
+  "neutral": [],
+  "not_models": []
 }

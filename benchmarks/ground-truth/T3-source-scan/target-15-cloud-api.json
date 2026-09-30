@@ -1,32 +1,35 @@
 {
-  "_comment": "Ground truth for target-17-cloud-api (synthetic). Hybrid RAG pipeline: local HuggingFace embeddings + cloud LLM generation. Tests tools that span both HF-transformers patterns (from_pretrained, SentenceTransformer) AND cloud-API patterns (ChatOpenAI, ChatAnthropic). aibomgen-cli detects only the python_literal HF models; akumar-aibom detects only the python_literal cloud-API models; jorisbot-aibom and trusera-aibom should detect both.",
-  "_method": "Manual annotation from target-17-cloud-api/chain.py.",
-  "target": "target-17-cloud-api",
-  "target_path": "targets/target-17-cloud-api",
+  "schema_version": 2,
+  "target": "target-15-cloud-api",
   "models": [
     {
       "id": "BAAI/bge-small-en-v1.5",
-      "detectable": true,
-      "pattern": "SentenceTransformer(\"BAAI/bge-small-en-v1.5\")",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "chain.py",
+      "pattern": "SentenceTransformer(\"BAAI/bge-small-en-v1.5\")"
     },
     {
       "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-      "detectable": true,
+      "scope": "python_literal",
+      "file": "chain.py",
       "pattern": "AutoTokenizer.from_pretrained(\"cross-encoder/ms-marco-MiniLM-L-6-v2\")",
-      "detectable_scope": "python_literal"
+      "aliases": [
+        "cross-encoder/ms-marco-MiniLM-L6-v2"
+      ]
     },
     {
       "id": "gpt-4o",
-      "detectable": true,
-      "pattern": "ChatOpenAI(model_name=\"gpt-4o\")",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "chain.py",
+      "pattern": "ChatOpenAI(model_name=\"gpt-4o\")"
     },
     {
       "id": "claude-3-haiku-20240307",
-      "detectable": true,
-      "pattern": "ChatAnthropic(model=\"claude-3-haiku-20240307\")",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "chain.py",
+      "pattern": "ChatAnthropic(model=\"claude-3-haiku-20240307\")"
     }
-  ]
+  ],
+  "neutral": [],
+  "not_models": []
 }

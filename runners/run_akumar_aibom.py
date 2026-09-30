@@ -1,9 +1,9 @@
 """
 Runner for akumar-aibom.
 
-Task: T3_T4G2 — `uv run aibom generate <source_dir> -o <output_file> --profile ai-bom-like`
+Task: T3_T4 — `uv run aibom generate <source_dir> -o <output_file> --profile ai-bom-like`
 Output: akumar's proprietary AIBOM JSON.  A CycloneDX export is produced
-        inline (via `aibom export --format cyclonedx-json`) for T4-G2 scoring.
+        inline (via `aibom export --format cyclonedx-json`) for T4 scoring.
 
 cleanup_side_effects: removes any AI_BOM.json, AIBOM.json etc. left in tool working dir.
 """
@@ -17,10 +17,7 @@ from typing import Any
 from constants import EVAL_ROOT
 from runners.base_runner import BaseRunner
 from scoring.extract import extract_model_ids_akumar
-from scoring.score_cdx_conformance import score_cdx_conformance
-from scoring.score_cdx_completeness import score_cdx_completeness
-from scoring.score_discovery import score_discovery
-from scoring.utils import resolve_ground_truth_path
+from scoring.score_cdx import score_cdx_paths
 
 
 def _export_cyclonedx(native_path: Path, entry: list[str], working_dir: Path) -> Path | None:
@@ -28,7 +25,7 @@ def _export_cyclonedx(native_path: Path, entry: list[str], working_dir: Path) ->
 
     Returns None if the export command fails or produces no file.
     """
-    cdx_path = native_path.parent / "AI_BOM_cdx.json"
+    cdx_path = native_path.parent / "AI_BOM_cdx.json"  # keep in sync with cdx_output_paths()
     try:
         result = subprocess.run(
             entry + ["export", "--format", "cyclonedx-json",
@@ -42,6 +39,17 @@ def _export_cyclonedx(native_path: Path, entry: list[str], working_dir: Path) ->
     except Exception:
         pass
     return None
+
+def _is_tracked(path: Path) -> bool:
+    """True if ``path`` is tracked by the git repo it lives in."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(path.parent), "ls-files", "--error-unmatch", path.name],
+            capture_output=True, timeout=10,
+        ).returncode == 0
+    except Exception:
+        return False
+
 
 _SETUPTOOLS_PATCH = """
 [tool.setuptools.packages.find]
@@ -84,6 +92,15 @@ class AkumarAibomRunner(BaseRunner):
         p = output_dir / "AI_BOM.json"
         return p if p.exists() else None
 
+    @classmethod
+    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        return extract_model_ids_akumar(tool_output_dir / "AI_BOM.json")
+
+    @classmethod
+    def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
+        p = tool_output_dir / "AI_BOM_cdx.json"   # written by _export_cyclonedx()
+        return [p] if p.exists() else []
+
     def cleanup_side_effects(self, tool_output_dir: Path, input_spec: str = "") -> None:
         """Remove side-effect files written by akumar-aibom.
 
@@ -94,8 +111,8 @@ class AkumarAibomRunner(BaseRunner):
         tool_dir = self.working_dir()
         for pattern in _AKUMAR_SIDE_EFFECT_GLOBS:
             for match in tool_dir.glob(pattern):
-                # Never delete anything inside results/
-                if "results" not in match.parts:
+                # Never delete anything inside results/, nor a file tracked in akumar's own repo
+                if "results" not in match.parts and not _is_tracked(match):
                     try:
                         match.unlink()
                     except Exception:
@@ -122,25 +139,23 @@ class AkumarAibomRunner(BaseRunner):
                 except Exception:
                     pass
 
+    def post_run(self) -> None:
+        """Undo the pyproject.toml patch (and restore the tracked sample AI_BOM.json) so the
+        submodule checkout stays clean."""
+        subprocess.run(
+            ["git", "-C", str(self.working_dir()), "checkout", "--", "pyproject.toml", "AI_BOM.json"],
+            capture_output=True, timeout=30,
+        )
+
     def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
         if output_path is None:
             return {}
 
-        gt_str = self.task_config.get("current_dataset_ground_truth", "")
-        ground_truth_path = resolve_ground_truth_path(gt_str or None, EVAL_ROOT)
+        # T3 discovery from akumar's native format (not CycloneDX)
+        scores = self._discovery_scores(self.detections_from_output_dir(self.tool_output_dir))
 
-        # T3 discovery: extract from akumar's native format (not CycloneDX)
-        detected = extract_model_ids_akumar(output_path)
-        scores: dict[str, Any] = {"detected_ids": detected}
-
-        if ground_truth_path and ground_truth_path.exists():
-            scores.update(score_discovery(detected, ground_truth_path))
-
-        # T4-G2 CycloneDX quality: export to CycloneDX first, then score
+        # T4 CycloneDX quality: export to CycloneDX first, then score
         entry = self.tool_config.get("entry", ["uv", "run", "aibom"])
-        cdx_path = _export_cyclonedx(output_path, entry, self.working_dir())
-        if cdx_path:
-            scores.update(score_cdx_conformance(cdx_path))
-            scores.update(score_cdx_completeness(cdx_path))
-
+        _export_cyclonedx(output_path, entry, self.working_dir())
+        scores.update(score_cdx_paths(self.cdx_output_paths(self.tool_output_dir)))
         return scores

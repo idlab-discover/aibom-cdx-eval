@@ -1,27 +1,26 @@
 {
-  "_comment": "Ground truth for target-06-mixed (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
+  "schema_version": 2,
   "target": "target-06-mixed",
-  "target_path": "targets/target-06-mixed",
   "models": [
     {
       "id": "Xenova/bert-base-NER",
-      "detectable": true,
-      "pattern": "TypeScript const MODEL_ID",
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "inference.ts",
+      "pattern": "TypeScript const MODEL_ID"
     },
     {
       "id": "Xenova/distilbert-base-uncased-finetuned-sst-2-english",
-      "detectable": true,
-      "pattern": "TypeScript const SENTIMENT_MODEL",
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "inference.ts",
+      "pattern": "TypeScript const SENTIMENT_MODEL"
     },
     {
       "id": "Xenova/all-MiniLM-L6-v2",
-      "detectable": true,
-      "pattern": "JavaScript pipeline call",
-      "detectable_scope": "js_literal"
+      "scope": "js_literal",
+      "file": "embed.js",
+      "pattern": "JavaScript pipeline call"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

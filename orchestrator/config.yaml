@@ -4,30 +4,31 @@
 # ============================================================
 #
 # Task semantics:
-#   T1_T2   — HuggingFace model-ID → AIBOM generation.
-#             A single execution pass; aggregator derives T1 (performance)
-#             and T2 (failure rate) scores from the same run outputs.
-#   T3_T4G2 — Repository source-code scanning → model detection + CycloneDX.
-#             A single execution pass; aggregator derives T3 (discovery) and
-#             T4-G2 (CycloneDX conformance/completeness) scores.
-#   T4-G1   — Scoring-only pass on T1_T2 outputs for CycloneDX tools.
-#             No separate tool invocation; use --reuse-outputs-from in CLI.
+#   T1_T2 — input is a HuggingFace model ID → AIBOM generation.
+#           A single execution pass; the aggregator derives T1 (performance),
+#           T2 (reliability) and T4-MODELID (CycloneDX quality) from it.
+#   T3_T4 — input is a source-code directory → model discovery + CycloneDX.
+#           A single execution pass; the aggregator derives T3 (discovery) and
+#           T4-SCAN (CycloneDX quality) from it.
 #
 # Tool groups (never compare across groups):
-#   HF model-ID group : aibomgen-cli (generate), aibom-generator, ALOHA, lab700xorg-aisbom
-#   Repo-scan group   : aibomgen-cli (scan), akumar-aibom, jorisbot-aibom, trusera-aibom
+#   HF model-ID input : aibomgen-cli (generate), OWASP aibom-generator, ALOHA, lab700xorg-aisbom
+#   Source-code scan  : aibomgen-cli (scan), akumar-aibom, jorisbot-aibom, trusera-aibom
 #
-# CDX-capable (eligible for T4):
-#   T4-G1 : aibomgen-cli, aibom-generator, ALOHA, lab700xorg-aisbom
-#   T4-G2 : aibomgen-cli, akumar-aibom, trusera-aibom
+# CycloneDX-capable (eligible for T4):
+#   T4-MODELID : aibomgen-cli, OWASP aibom-generator, ALOHA, lab700xorg-aisbom
+#   T4-SCAN    : aibomgen-cli, akumar-aibom, trusera-aibom
 # ============================================================
 
 run:
   base_output_dir: "results/runs"
+  # Passed to every runner (see orchestrator._build_jobs). A tool block may override any of these.
   max_retries: 3
   retry_delay_seconds: 30
   timeout_seconds: 1800
+  retry_on_timeout: false      # a timed-out job is recorded as a failure, not retried
   default_dataset_limit: 100
+  baseline_samples: 5          # no-op invocations timed per tool to estimate process start-up cost
 
 hf:
   token_env: "HF_TOKEN"
@@ -39,22 +40,23 @@ tools:
     display_name: "aibomgen-cli"
     runtime: binary
     binary: "/home/ubuntu/go/bin/aibomgen-cli"
-    tasks: ["T1_T2", "T3_T4G2"]
+    tasks: ["T1_T2", "T3_T4"]
     output_format: cyclonedx-json
     cdx_capable: true
-    t4_groups: ["T4-G1", "T4-G2"]
+    t4_inputs: ["model-id", "source-scan"]
     optional: false
+    source_repo: "/home/ubuntu/aibomgen-cli"   # git checkout the binary is built from (version provenance)
 
   aibom-generator:
     id: aibom-generator
-    display_name: "aibom-generator (OWASP)"
+    display_name: "OWASP aibom-generator"
     runtime: uv
     path: "tools/aibom-generator"
     entry: ["uv", "run", "python", "-m", "src.cli"]
     tasks: ["T1_T2"]
     output_format: cyclonedx-json
     cdx_capable: true
-    t4_groups: ["T4-G1"]
+    t4_inputs: ["model-id"]
     optional: false
 
   ALOHA:
@@ -66,7 +68,7 @@ tools:
     tasks: ["T1_T2"]
     output_format: cyclonedx-json
     cdx_capable: true
-    t4_groups: ["T4-G1"]
+    t4_inputs: ["model-id"]
     optional: false
     notes: "ALOHA reads HF_TOKEN from the environment via _hf_headers(); token is forwarded by the eval framework."
 
@@ -79,12 +81,12 @@ tools:
     tasks: ["T1_T2"]
     output_format: cyclonedx-json
     cdx_capable: true
-    t4_groups: ["T4-G1"]
+    t4_inputs: ["model-id"]
     optional: false
     tool_flags: ["--no-fail-on-risk"]
     notes: >
       Uses `aisbom scan hf://{model_id}` (zero-download header inspection).
-      Scans binary ML artifacts; NOT in T3_T4G2 (source-code-reference scanning).
+      Scans binary ML artifacts; NOT in T3_T4 (source-code-reference scanning).
 
   akumar-aibom:
     id: akumar-aibom
@@ -92,10 +94,10 @@ tools:
     runtime: uv
     path: "tools/akumar-aibom"
     entry: ["uv", "run", "aibom"]
-    tasks: ["T3_T4G2"]
+    tasks: ["T3_T4"]
     output_format: cyclonedx-json
     cdx_capable: true
-    t4_groups: ["T4-G2"]
+    t4_inputs: ["source-scan"]
     optional: false
     cleanup_side_effects: true
 
@@ -105,10 +107,10 @@ tools:
     runtime: uv
     path: "tools/jorisbot-aibom"
     entry: ["uv", "run", "aibom"]
-    tasks: ["T3_T4G2"]
+    tasks: ["T3_T4"]
     output_format: custom-json
     cdx_capable: false
-    t4_groups: []
+    t4_inputs: []
     optional: false
 
   trusera-aibom:
@@ -117,10 +119,10 @@ tools:
     runtime: uv
     path: "tools/trusera-aibom"
     entry: ["uv", "run", "ai-bom"]
-    tasks: ["T3_T4G2"]
+    tasks: ["T3_T4"]
     output_format: cyclonedx-json
     cdx_capable: true
-    t4_groups: ["T4-G2"]
+    t4_inputs: ["source-scan"]
     optional: false
 
   cisco-aibom:
@@ -132,7 +134,7 @@ tools:
     tasks: []
     output_format: cyclonedx-json
     cdx_capable: false
-    t4_groups: []
+    t4_inputs: []
     optional: true
     skip_reason: "Requires --llm-model and LLM API key in all modes."
 
@@ -151,13 +153,13 @@ tasks:
         type: model-id-list
     scorers: [performance, reliability, cdx_conformance, cdx_completeness]
 
-  T3_T4G2:
-    id: T3_T4G2
+  T3_T4:
+    id: T3_T4
     display_name: "Repo Source Scan (Discovery + CycloneDX Conformance)"
     description: >
-      Scan a source repository for HF model references.
+      Scan a source repository for model references.
       Aggregator splits into T3 (discovery: precision/recall/F1) and
-      T4-G2 (CycloneDX conformance + field completeness for CDX tools).
+      T4-SCAN (CycloneDX conformance + field completeness for CDX tools).
     datasets:
       # python scope
       - id: target-01-python

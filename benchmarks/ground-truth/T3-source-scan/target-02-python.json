@@ -1,36 +1,20 @@
 {
-  "_comment": "Ground truth for target-2. Source: aibomgen-cli/targets/target-2/src/",
-  "_method": "Manual annotation. use_model.py uses mixed constructor-style and from_pretrained patterns; use_dataset.py uses load_dataset.",
-  "_notes": {
-    "templates/model-card-example": "Unusual format — org=templates; some scanners may reject as invalid HF ID. Included as detectable=true since it follows org/model format and is literally in the source."
-  },
+  "schema_version": 2,
   "target": "target-02-python",
-  "target_path": "targets/target-02-python",
   "models": [
     {
       "id": "WiebeVandendriessche/model-card-example",
-      "detectable": true,
-      "pattern": "ChatOpenAI(model=)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "ChatOpenAI(model=)"
     },
     {
       "id": "templates/model-card-example",
-      "detectable": true,
-      "pattern": "AutoModel.from_pretrained",
-      "edge_case": true,
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "AutoModel.from_pretrained"
     }
   ],
-  "datasets": [
-    {
-      "id": "wmt14/de-en",
-      "detectable": true,
-      "pattern": "load_dataset"
-    },
-    {
-      "id": "glue/mrpc",
-      "detectable": true,
-      "pattern": "load_dataset"
-    }
-  ]
+  "neutral": [],
+  "not_models": []
 }

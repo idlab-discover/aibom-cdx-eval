@@ -1,7 +1,7 @@
 """
 Runner for trusera-aibom (ai-bom).
 
-Task: T3_T4G2 — `uv run ai-bom scan <source_dir> --deep -f cyclonedx -o <output_file>`
+Task: T3_T4 — `uv run ai-bom scan <source_dir> --deep -f cyclonedx -o <output_file>`
 Output: CycloneDX JSON with trusera extensions.
 
 --deep enables AST-based detection (function calls, string literals) in addition
@@ -14,13 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from constants import EVAL_ROOT
 from runners.base_runner import BaseRunner
-from scoring.extract import extract_model_ids_cyclonedx
-from scoring.score_cdx_conformance import score_cdx_conformance
-from scoring.score_cdx_completeness import score_cdx_completeness
-from scoring.score_discovery import score_discovery
-from scoring.utils import resolve_ground_truth_path
+from scoring.extract import extract_model_ids_cyclonedx_many
+from scoring.score_cdx import score_cdx_paths
 
 
 class TruseraAibomRunner(BaseRunner):
@@ -37,20 +33,13 @@ class TruseraAibomRunner(BaseRunner):
         p = output_dir / "ai-bom.cdx.json"
         return p if p.exists() else None
 
+    @classmethod
+    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        return extract_model_ids_cyclonedx_many(cls.cdx_output_paths(tool_output_dir))
+
     def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
         if output_path is None:
             return {}
-
-        gt_str = self.task_config.get("current_dataset_ground_truth", "")
-        ground_truth_path = resolve_ground_truth_path(gt_str or None, EVAL_ROOT)
-
-        detected = extract_model_ids_cyclonedx(output_path)
-        scores: dict[str, Any] = {"detected_ids": detected}
-
-        if ground_truth_path and ground_truth_path.exists():
-            scores.update(score_discovery(detected, ground_truth_path))
-
-        scores.update(score_cdx_conformance(output_path))
-        scores.update(score_cdx_completeness(output_path))
-
+        scores = self._discovery_scores(self.detections_from_output_dir(self.tool_output_dir))
+        scores.update(score_cdx_paths(self.cdx_output_paths(self.tool_output_dir)))
         return scores

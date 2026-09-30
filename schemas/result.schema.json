@@ -4,61 +4,320 @@
   "description": "Unified per-run result record written by every tool runner.",
   "type": "object",
   "required": [
-    "run_id", "tool", "tool_version", "tool_commit",
-    "task", "dataset", "input_spec",
-    "timestamp_start", "timestamp_end", "duration_seconds",
-    "exit_code", "success", "retries", "scores"
+    "run_id",
+    "tool",
+    "tool_version",
+    "tool_commit",
+    "task",
+    "dataset",
+    "input_spec",
+    "timestamp_start",
+    "timestamp_end",
+    "duration_seconds",
+    "exit_code",
+    "success",
+    "retries",
+    "scores"
   ],
   "properties": {
-    "run_id":           { "type": "string" },
-    "tool":             { "type": "string" },
-    "tool_version":     { "type": "string" },
-    "tool_commit":      { "type": "string" },
-    "task":             {
-      "type": "string",
-      "enum": ["T1_T2", "T3_T4G2"],
-      "description": "T1_T2 = HF model-ID generation (perf + reliability); T3_T4G2 = repo scan (discovery + CDX conformance)"
+    "run_id": {
+      "type": "string"
     },
-    "dataset":          { "type": "string" },
-    "input_spec":       { "type": "string", "description": "Model ID, directory path, or list file path" },
-    "timestamp_start":  { "type": "string", "format": "date-time" },
-    "timestamp_end":    { "type": "string", "format": "date-time" },
-    "duration_seconds": { "type": "number", "minimum": 0 },
-    "peak_memory_mb":   { "type": ["number", "null"], "minimum": 0 },
-    "exit_code":        { "type": "integer" },
-    "success":          { "type": "boolean" },
-    "retries":          { "type": "integer", "minimum": 0 },
-    "raw_output_path":  { "type": ["string", "null"] },
-    "error_message":    { "type": ["string", "null"] },
+    "tool": {
+      "type": "string"
+    },
+    "tool_version": {
+      "type": "string"
+    },
+    "tool_commit": {
+      "type": "string"
+    },
+    "task": {
+      "type": "string",
+      "enum": [
+        "T1_T2",
+        "T3_T4",
+        "T3_T4G2"
+      ],
+      "description": "T1_T2 = runs from an HF model ID (performance, reliability, CycloneDX quality); T3_T4 = runs from a source-code scan (discovery, CycloneDX quality). T3_T4G2 is the name used by eval-001/002."
+    },
+    "dataset": {
+      "type": "string"
+    },
+    "input_spec": {
+      "type": "string",
+      "description": "Model ID, directory path, or list file path"
+    },
+    "timestamp_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "timestamp_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Wall time of the final attempt only (retries and their waits excluded)."
+    },
+    "peak_memory_mb": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "exit_code": {
+      "type": "integer"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "retries": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "raw_output_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "error_message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "scores": {
       "type": "object",
       "properties": {
-        "fields_present":              { "type": ["integer", "null"], "minimum": 0,
-                                         "description": "Count of non-null/non-empty leaf fields in output JSON (properties array = 1 unit)" },
-        "output_size_bytes":           { "type": ["integer", "null"], "minimum": 0 },
-        "normalized_throughput":       { "type": ["number", "null"],
-                                         "description": "fields_present / duration_seconds" },
-        "size_normalized_throughput":  { "type": ["number", "null"],
-                                         "description": "fields_present / output_size_bytes (secondary signal)" },
-        "error_class":                 { "type": ["string", "null"],
-                                         "enum": ["success", "timeout", "network_error", "parse_error", "crash", "missing_output", null] },
-        "precision":                   { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-        "recall":                      { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-        "f1":                          { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-        "tp":                          { "type": ["integer", "null"] },
-        "fp":                          { "type": ["integer", "null"] },
-        "fn":                          { "type": ["integer", "null"] },
-        "detected_ids":                { "type": ["array", "null"], "items": { "type": "string" } },
-        "cdx_conformance_valid_v16":   { "type": ["boolean", "null"] },
-        "cdx_conformance_valid_v17":   { "type": ["boolean", "null"] },
-        "cdx_conformance_errors_v16":  { "type": ["array", "null"], "items": { "type": "string" } },
-        "cdx_conformance_errors_v17":  { "type": ["array", "null"], "items": { "type": "string" } },
-        "cdx_completeness_pct_v16":    { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
-        "cdx_completeness_pct_v17":    { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
-        "cdx_completeness_detail_v16": { "type": ["object", "null"],
-                                         "description": "Map of field path → bool (present/absent)" }
+        "fields_present": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Count of non-null/non-empty leaf fields in output JSON (properties array = 1 unit)"
+        },
+        "output_size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "normalized_throughput": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "fields_present / duration_seconds"
+        },
+        "size_normalized_throughput": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "fields_present / output_size_bytes (secondary signal)"
+        },
+        "error_class": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "success",
+            "success_empty",
+            "timeout",
+            "gated_or_unauthorized",
+            "network_error",
+            "parse_error",
+            "crash",
+            "missing_output",
+            "unauthorized_download",
+            null
+          ],
+          "description": "success_empty = a scan tool ran fine and found nothing (valid, zero detections). unauthorized_download is the pre-rename name of gated_or_unauthorized."
+        },
+        "precision": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Per-run discovery score; the summary re-scores T3 from detected_ids and the current ground truth."
+        },
+        "recall": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Per-run discovery score; the summary re-scores T3 from detected_ids and the current ground truth."
+        },
+        "f1": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Per-run discovery score; the summary re-scores T3 from detected_ids and the current ground truth."
+        },
+        "tp": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fp": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fn": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "detected_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "cdx_conformance_valid_v16": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cdx_conformance_valid_v17": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cdx_conformance_errors_v16": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "cdx_conformance_errors_v17": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "cdx_completeness_pct_v16": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "cdx_completeness_pct_v17": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "cdx_completeness_detail_v16": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Map of field path \u2192 bool (present/absent)"
+        },
+        "tp_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Ground-truth ids found / missed, and detections matching nothing (T3)."
+        },
+        "fn_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Ground-truth ids found / missed, and detections matching nothing (T3)."
+        },
+        "fp_ids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Ground-truth ids found / missed, and detections matching nothing (T3)."
+        },
+        "cdx_bom_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Number of CycloneDX files scored for this run (scan mode emits one per model)."
+        },
+        "cdx_model_completeness_pct_v16": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Share of component-schema fields filled on the primary ML-model component."
+        },
+        "cdx_model_completeness_pct_v17": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Share of component-schema fields filled on the primary ML-model component."
+        },
+        "cdx_completeness_detail_v17": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Map of field path \u2192 bool (present/absent)"
+        }
       },
       "additionalProperties": false
+    },
+    "total_wall_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Whole span of the job including retries and retry waits."
     }
   },
   "additionalProperties": false

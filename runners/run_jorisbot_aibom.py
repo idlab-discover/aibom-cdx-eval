@@ -1,6 +1,6 @@
 """
 Runner for jorisbot-aibom.
-Task: T2 — `uv run aibom scan <source_dir> --output <file> --format json`
+Task: T3 — `uv run aibom scan <source_dir> --output <file> --format json`
 Output: Custom JSON {models[{name, provider, model_card_url, detected_in}], datasets[], ...}
 """
 
@@ -9,11 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from constants import EVAL_ROOT
 from runners.base_runner import BaseRunner
 from scoring.extract import extract_model_ids_jorisbot
-from scoring.score_discovery import score_discovery
-from scoring.utils import resolve_ground_truth_path
 
 
 class JorisbotAibomRunner(BaseRunner):
@@ -35,17 +32,15 @@ class JorisbotAibomRunner(BaseRunner):
         p = output_dir / "report.json"
         return p if p.exists() else None
 
+    @classmethod
+    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        return extract_model_ids_jorisbot(tool_output_dir / "report.json")
+
+    @classmethod
+    def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
+        return []   # custom JSON, not CycloneDX
+
     def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
         if output_path is None:
             return {}
-
-        gt_str = self.task_config.get("current_dataset_ground_truth", "")
-        ground_truth_path = resolve_ground_truth_path(gt_str or None, EVAL_ROOT)
-
-        detected = extract_model_ids_jorisbot(output_path)
-        scores: dict[str, Any] = {"detected_ids": detected}
-
-        if ground_truth_path and ground_truth_path.exists():
-            scores.update(score_discovery(detected, ground_truth_path))
-
-        return scores
+        return self._discovery_scores(self.detections_from_output_dir(self.tool_output_dir))

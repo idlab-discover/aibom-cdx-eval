@@ -1,39 +1,41 @@
 {
-  "_comment": "Ground truth for target-09-config (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
+  "schema_version": 2,
   "target": "target-09-config",
-  "target_path": "targets/target-09-config",
   "models": [
     {
       "id": "google-bert/bert-base-multilingual-cased",
-      "detectable": true,
-      "pattern": "YAML config: model.name",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "YAML config: model.name"
     },
     {
       "id": "sentence-transformers/all-MiniLM-L6-v2",
-      "detectable": true,
-      "pattern": "YAML config: embedding_model",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "YAML config: embedding_model"
     },
     {
       "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-      "detectable": true,
+      "scope": "yaml_literal",
+      "file": "config.yaml",
       "pattern": "YAML config: reranker.model_id",
-      "detectable_scope": "yaml_literal"
+      "aliases": [
+        "cross-encoder/ms-marco-MiniLM-L6-v2"
+      ]
     },
     {
       "id": "BAAI/bge-large-en-v1.5",
-      "detectable": true,
-      "pattern": "YAML pipeline step",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "pipeline.yaml",
+      "pattern": "YAML pipeline step"
     },
     {
       "id": "facebook/bart-large-mnli",
-      "detectable": true,
-      "pattern": "YAML pipeline step",
-      "detectable_scope": "yaml_literal"
+      "scope": "yaml_literal",
+      "file": "pipeline.yaml",
+      "pattern": "YAML pipeline step"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

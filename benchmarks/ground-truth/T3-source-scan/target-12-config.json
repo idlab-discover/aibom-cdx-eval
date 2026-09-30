@@ -1,21 +1,20 @@
 {
-  "_comment": "Ground truth for target-07-config (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
-  "target": "target-07-config",
-  "target_path": "targets/target-07-config",
+  "schema_version": 2,
+  "target": "target-12-config",
   "models": [
     {
       "id": "meta-llama/Llama-2-7b-chat-hf",
-      "detectable": true,
-      "pattern": "Dockerfile ARG MODEL_ID default",
-      "detectable_scope": "dockerfile_literal"
+      "scope": "dockerfile_literal",
+      "file": "Dockerfile",
+      "pattern": "Dockerfile ARG MODEL_ID default"
     },
     {
       "id": "sentence-transformers/all-mpnet-base-v2",
-      "detectable": true,
-      "pattern": "Dockerfile ENV EMBEDDING_MODEL",
-      "detectable_scope": "dockerfile_literal"
+      "scope": "dockerfile_literal",
+      "file": "Dockerfile",
+      "pattern": "Dockerfile ENV EMBEDDING_MODEL"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

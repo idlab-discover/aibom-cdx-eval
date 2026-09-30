@@ -3,10 +3,10 @@ services:
   api:
     build: ./api
     environment:
-      - LLM_MODEL=mistralai/Mistral-7B-Instruct-v0.2
-      - EMBED_MODEL=sentence-transformers/all-MiniLM-L12-v2
+      - HF_INFERENCE_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+      - AZURE_OPENAI_DEPLOYMENT=gpt-4o
   worker:
     build: ./worker
     environment:
-      - CLASSIFIER_MODEL=facebook/bart-large-mnli
-      - SUMMARIZER_MODEL=philschmid/bart-large-cnn-samsum
+      - BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+      - EMBED_MODEL=sentence-transformers/all-MiniLM-L12-v2

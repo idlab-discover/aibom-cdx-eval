@@ -1,45 +1,47 @@
 {
-  "_comment": "Ground truth for target-11-config (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files.",
+  "schema_version": 2,
   "target": "target-11-config",
-  "target_path": "targets/target-11-config",
   "models": [
     {
       "id": "deepseek-ai/deepseek-coder-1.3b-instruct",
-      "detectable": true,
-      "pattern": "config.json model",
-      "detectable_scope": "json_literal"
+      "scope": "json_literal",
+      "file": "config.json",
+      "pattern": "config.json model"
     },
     {
       "id": "BAAI/bge-small-en-v1.5",
-      "detectable": true,
-      "pattern": "config.json embedding_model",
-      "detectable_scope": "json_literal"
+      "scope": "json_literal",
+      "file": "config.json",
+      "pattern": "config.json embedding_model"
     },
     {
       "id": "microsoft/codebert-base",
-      "detectable": true,
-      "pattern": "config.json fallback_model",
-      "detectable_scope": "json_literal"
+      "scope": "json_literal",
+      "file": "config.json",
+      "pattern": "config.json fallback_model"
     },
     {
       "id": "HuggingFaceTB/SmolLM-135M",
-      "detectable": true,
-      "pattern": "pyproject.toml default_model",
-      "detectable_scope": "toml_literal"
+      "scope": "toml_literal",
+      "file": "pyproject.toml",
+      "pattern": "pyproject.toml default_model"
     },
     {
       "id": "cross-encoder/ms-marco-TinyBERT-L-2",
-      "detectable": true,
+      "scope": "toml_literal",
+      "file": "pyproject.toml",
       "pattern": "pyproject.toml reranker_model",
-      "detectable_scope": "toml_literal"
+      "aliases": [
+        "cross-encoder/ms-marco-TinyBERT-L2"
+      ]
     },
     {
       "id": "Qwen/Qwen2.5-1.5B-Instruct",
-      "detectable": true,
-      "pattern": "pyproject.toml models.chat",
-      "detectable_scope": "toml_literal"
+      "scope": "toml_literal",
+      "file": "pyproject.toml",
+      "pattern": "pyproject.toml models.chat"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }

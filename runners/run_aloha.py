@@ -10,12 +10,22 @@ from pathlib import Path
 from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.score_cdx_conformance import score_cdx_conformance
-from scoring.score_cdx_completeness import score_cdx_completeness
+from scoring.score_cdx import score_cdx_paths
 
 
 class ALOHARunner(BaseRunner):
     # working_dir() resolved by BaseRunner from config path (relative to EVAL_ROOT)
+
+    def get_version(self) -> tuple[str, str]:
+        # No upstream repo: identify the bundled script by its content hash.
+        import hashlib
+
+        script = self.working_dir() / "ALOHA.py"
+        try:
+            digest = hashlib.sha1(script.read_bytes()).hexdigest()[:12]
+        except OSError:
+            digest = "unknown"
+        return "zenodo-15053885", digest
 
     def adjust_exit_code(self, exit_code: int, stdout_log: Path, stderr_log: Path) -> int:
         """ALOHA calls bare exit() (code 0) on API errors such as 429 rate
@@ -53,7 +63,4 @@ class ALOHARunner(BaseRunner):
     def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
         if output_path is None:
             return {}
-        return {
-            **score_cdx_conformance(output_path),
-            **score_cdx_completeness(output_path),
-        }
+        return score_cdx_paths(self.cdx_output_paths(self.tool_output_dir))

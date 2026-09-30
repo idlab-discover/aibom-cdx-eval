@@ -1,33 +1,32 @@
 {
-  "_comment": "Ground truth for target-04-python (synthetic). Annotated detectable model references.",
-  "_method": "Manual annotation from synthetic source files with mixed constructor-style and from_pretrained patterns.",
+  "schema_version": 2,
   "target": "target-04-python",
-  "target_path": "targets/target-04-python",
   "models": [
     {
       "id": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
-      "detectable": true,
-      "pattern": "SentenceTransformer()",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "embed.py",
+      "pattern": "SentenceTransformer()"
     },
     {
       "id": "BAAI/bge-reranker-v2-m3",
-      "detectable": true,
-      "pattern": "ChatOpenAI(model=)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "embed.py",
+      "pattern": "ChatOpenAI(model=)"
     },
     {
       "id": "microsoft/Florence-2-base",
-      "detectable": true,
-      "pattern": "Ollama(model=)",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "vision.py",
+      "pattern": "Ollama(model=)"
     },
     {
       "id": "openai/whisper-large-v3",
-      "detectable": true,
-      "pattern": "whisper.load_model",
-      "detectable_scope": "python_literal"
+      "scope": "python_literal",
+      "file": "audio.py",
+      "pattern": "whisper.load_model"
     }
   ],
-  "_notes": ""
+  "neutral": [],
+  "not_models": []
 }
