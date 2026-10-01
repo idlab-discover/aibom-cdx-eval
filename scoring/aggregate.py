@@ -65,6 +65,7 @@ from constants import (
     K_RETRIES_MEAN,
     K_SIZE_NORM_THROUGHPUT,
     K_SUCCESS_RATE,
+    K_UNIDENTIFIED,
     LEGACY_ERROR_CLASSES,
     LEGACY_TASK_IDS,
     RESULTS_DIR,
@@ -114,6 +115,8 @@ def main(run_id: str, results_dir: str) -> None:
 
     click.echo(f"Summary → {summary_path}")
     _write_t3_tables(run_id, summary)
+    _write_other_tables(run_id, summary)
+    _write_report(run_id, summary)
 
 
 # ------------------------------------------------------------------ #
@@ -386,12 +389,14 @@ def _score_target(record: dict) -> dict | None:
         return None
     gt = load_ground_truth(gt_path)
     detected = (record.get("scores") or {}).get(K_DETECTED_IDS) or []
+    unidentified = (record.get("scores") or {}).get(K_UNIDENTIFIED) or []
     m = match_detections(detected, gt)
     tp, fp, fn = len(m.tp_ids), len(m.fp_ids), len(m.fn_ids)
     return {
         "dataset": record.get("dataset"),
         "tp": tp, "fp": fp, "fn": fn,
         "n_detected": len({d.strip().lower() for d in detected}),
+        "n_unidentified": len(unidentified),
         "failed": not record.get("success"),
         "tp_by_scope": dict(Counter(m.scope_of[i] for i in m.tp_ids)),
         "fn_by_scope": dict(Counter(m.scope_of[i] for i in m.fn_ids)),
@@ -445,6 +450,9 @@ def _discovery_block(targets: list[dict]) -> dict[str, Any]:
         "fp_per_target_mean": _mean([float(t["fp"]) for t in targets]),
         "zero_detect_rate": round(sum(1 for t in targets if t["n_detected"] == 0) / n, 4) if n else None,
         "failed_runs": sum(1 for t in targets if t["failed"]),
+        # Model claims that name no model (AI-usage entries): reported, not scored.
+        "unidentified_total": sum(t["n_unidentified"] for t in targets),
+        "unidentified_per_target_mean": _mean([float(t["n_unidentified"]) for t in targets]),
         "n_targets": n,
     }
 
@@ -494,7 +502,7 @@ def _aggregate_discovery(summary: dict, sub_task: str, records: list[dict]) -> N
             for s in sorted(set(tp_by) | set(fn_by))
         }
         metrics["per_target"] = {
-            t["dataset"]: {k: t[k] for k in ("tp", "fp", "fn", "f1_target", "failed")}
+            t["dataset"]: {k: t[k] for k in ("tp", "fp", "fn", "n_unidentified", "f1_target", "failed")}
             for t in targets
         }
 
@@ -553,6 +561,7 @@ def _t3_row(summary: dict[str, Any], tool: str, scope: str) -> dict[str, Any] | 
         "n_targets": m.get(f"n_scope_{scope}") if sfx else m.get("n_targets"),
         "zero_detect_rate": m.get(f"zero_detect_scope_{scope}_rate") if sfx else m.get("zero_detect_rate"),
         "failed_runs": m.get("failed_runs") if not sfx else None,
+        "unidentified_claims": m.get("unidentified_total") if not sfx else None,
     }
 
 
@@ -577,6 +586,146 @@ def _run_data_dir(run_id: str) -> Path:
     data_dir = AGGREGATED_DIR / "data" / run_id
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+# ------------------------------------------------------------------ #
+# T1 / T2 / T4 tables and the markdown report                          #
+# ------------------------------------------------------------------ #
+
+def _csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _tools_for(summary: dict[str, Any], sub_task: str) -> list[str]:
+    return [t for t in TOOL_ORDER if f"{t}::{sub_task}" in summary]
+
+
+def _t1_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for tool in _tools_for(summary, SUBTASK_T1):
+        e = summary[f"{tool}::{SUBTASK_T1}"]
+        m = e["metrics"]
+        d, net, thr = m.get("duration_stats") or {}, m.get("net_duration_stats") or {}, m.get("throughput_stats") or {}
+        rows.append({
+            "tool": tool, "label": TOOL_LABELS.get(tool, tool),
+            "runs": e["total_runs"], "successful": e["successful"], "n_models": d.get("n_models"),
+            "duration_median_s": d.get("median"), "duration_ci_low": d.get("ci_low"),
+            "duration_ci_high": d.get("ci_high"), "duration_q1": d.get("q1"), "duration_q3": d.get("q3"),
+            "startup_baseline_s": m.get("startup_baseline_seconds"),
+            "net_duration_median_s": net.get("median"),
+            "throughput_median_fields_per_s": thr.get("median"),
+        })
+    return rows
+
+
+def _t2_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for tool in _tools_for(summary, SUBTASK_T2):
+        e = summary[f"{tool}::{SUBTASK_T2}"]
+        rows.append({
+            "tool": tool, "label": TOOL_LABELS.get(tool, tool),
+            "n_models": e["n_models"], "models_failed": e["n_models_failed"],
+            "model_success_rate": e["model_success_rate"], "run_success_rate": e[K_SUCCESS_RATE],
+            "runs": e["total_runs"], "flaky_models": e["n_models_flaky"],
+            "error_classes_models": json.dumps(e["error_breakdown_models"]),
+            "failed_models": "; ".join(e["failed_models"]),
+        })
+    return rows
+
+
+def _t4_rows(summary: dict[str, Any], sub_task: str) -> list[dict[str, Any]]:
+    def mean(m: dict, key: str, field: str = "mean") -> float | None:
+        v = m.get(key)
+        return v.get(field) if isinstance(v, dict) else None
+
+    rows = []
+    for tool in _tools_for(summary, sub_task):
+        e = summary[f"{tool}::{sub_task}"]
+        m = e["metrics"]
+        rows.append({
+            "tool": tool, "label": TOOL_LABELS.get(tool, tool),
+            "runs": e["total_runs"], "scored": e["n_scored"], "no_bom": e["n_no_bom"],
+            "n_inputs": mean(m, K_CDX_COMPLETENESS_V16, "n_inputs"),
+            "conformance_v16": m.get(K_CDX_CONFORMANCE_PASS_V16), "conformance_v17": m.get(K_CDX_CONFORMANCE_PASS_V17),
+            "completeness_v16": mean(m, K_CDX_COMPLETENESS_V16), "completeness_v16_sd": mean(m, K_CDX_COMPLETENESS_V16, "std"),
+            "completeness_v17": mean(m, K_CDX_COMPLETENESS_V17), "completeness_v17_sd": mean(m, K_CDX_COMPLETENESS_V17, "std"),
+            "model_completeness_v16": mean(m, K_CDX_MODEL_COMPLETENESS_V16),
+            "model_completeness_v16_sd": mean(m, K_CDX_MODEL_COMPLETENESS_V16, "std"),
+            "model_completeness_v17": mean(m, K_CDX_MODEL_COMPLETENESS_V17),
+            "model_completeness_v17_sd": mean(m, K_CDX_MODEL_COMPLETENESS_V17, "std"),
+            "breadth_v16": mean(m, K_CDX_BREADTH_V16), "breadth_v17": mean(m, K_CDX_BREADTH_V17),
+        })
+    return rows
+
+
+def _write_other_tables(run_id: str, summary: dict[str, Any]) -> None:
+    """CSV tables for T1, T2 and both T4 input types (paper/report reuse)."""
+    data_dir = _run_data_dir(run_id)
+    tables = {
+        "t1_performance": _t1_rows(summary),
+        "t2_reliability": _t2_rows(summary),
+        "t4_model_id": _t4_rows(summary, SUBTASK_T4_MODELID),
+        "t4_source_scan": _t4_rows(summary, SUBTASK_T4_SCAN),
+    }
+    for name, rows in tables.items():
+        _csv(data_dir / f"{run_id}_{name}.csv", rows)
+        if rows:
+            click.echo(f"Table ({name}) → {data_dir / f'{run_id}_{name}.csv'}")
+
+
+def _fmt(v: Any) -> str:
+    if v is None:
+        return "–"
+    if isinstance(v, float):
+        return f"{v:.3f}".rstrip("0").rstrip(".") if abs(v) < 100 else f"{v:.1f}"
+    return str(v)
+
+
+def _md_table(title: str, rows: list[dict[str, Any]], columns: list[tuple[str, str]]) -> str:
+    if not rows:
+        return ""
+    head = "| " + " | ".join(label for _, label in columns) + " |"
+    rule = "|" + "|".join("---" for _ in columns) + "|"
+    body = ["| " + " | ".join(_fmt(r.get(key)) for key, _ in columns) + " |" for r in rows]
+    return f"### {title}\n\n" + "\n".join([head, rule, *body]) + "\n\n"
+
+
+def _write_report(run_id: str, summary: dict[str, Any]) -> None:
+    """One markdown file with every headline table of the run."""
+    t3 = [r for r in (_t3_row(summary, t, "full") for t in _tools_for(summary, SUBTASK_T3)) if r]
+    parts = [f"# {run_id}: results\n\nGenerated by `eval aggregate`; every number comes from "
+             f"`{run_id}_summary.json`.\n\n"]
+    parts.append(_md_table("T1: performance (HF model-ID input; median over unique models)", _t1_rows(summary), [
+        ("label", "Tool"), ("n_models", "Models"), ("duration_median_s", "Median s"),
+        ("duration_ci_low", "CI low"), ("duration_ci_high", "CI high"),
+        ("net_duration_median_s", "Net s"), ("startup_baseline_s", "Start-up s"),
+        ("throughput_median_fields_per_s", "Fields/s")]))
+    parts.append(_md_table("T2: reliability (per unique model)", _t2_rows(summary), [
+        ("label", "Tool"), ("n_models", "Models"), ("models_failed", "Failed"),
+        ("model_success_rate", "Success rate"), ("error_classes_models", "Error classes")]))
+    parts.append(_md_table("T3: model discovery (source-code scan; pooled over targets, 95 % bootstrap CI)", t3, [
+        ("label", "Tool"), ("precision", "Precision"), ("recall", "Recall"), ("f1", "F1"),
+        ("f1_ci_low", "F1 CI low"), ("f1_ci_high", "F1 CI high"), ("f1_macro_mean", "Macro F1"),
+        ("tp", "TP"), ("fp", "FP"), ("fn", "FN"), ("unidentified_claims", "Unidentified"),
+        ("n_targets", "Targets")]))
+    parts.append("Unidentified = model entries that name no model (e.g. an import or API-call "
+                 "detection); reported, not counted as TP or FP.\n\n")
+    t4_cols = [
+        ("label", "Tool"), ("scored", "BOMs scored"), ("no_bom", "No BOM"),
+        ("conformance_v16", "Conf. v1.6"), ("conformance_v17", "Conf. v1.7"),
+        ("completeness_v16", "Compl. v1.6"), ("completeness_v16_sd", "± SD"),
+        ("model_completeness_v16", "Model compl. v1.6"), ("model_completeness_v16_sd", "± SD"),
+        ("breadth_v16", "Breadth v1.6")]
+    parts.append(_md_table("T4: CycloneDX quality (HF model-ID input)", _t4_rows(summary, SUBTASK_T4_MODELID), t4_cols))
+    parts.append(_md_table("T4: CycloneDX quality (source-code scan)", _t4_rows(summary, SUBTASK_T4_SCAN), t4_cols))
+    path = _run_data_dir(run_id) / f"{run_id}_report.md"
+    path.write_text("".join(parts))
+    click.echo(f"Report → {path}")
 
 
 # ------------------------------------------------------------------ #

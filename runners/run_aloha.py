@@ -1,6 +1,6 @@
 """
 Runner for ALOHA.
-Task: T1 — `uv run --with-requirements requirements.txt python ALOHA.py <model_id> -o <outdir>`
+Task: T1_T2 — `uv run --with-requirements requirements.txt python ALOHA.py <model_id> -o <outdir>`
 Output: CycloneDX 1.6 JSON in <outdir>/<org>_<model>.json (slashes replaced with underscores).
 """
 

@@ -22,5 +22,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "rajpurkar/squad",
+      "kind": "dataset (load_dataset)",
+      "file": "experiment.ipynb"
+    }
+  ]
 }

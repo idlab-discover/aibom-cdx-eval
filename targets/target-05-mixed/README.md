@@ -28,7 +28,7 @@ tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B")
 
 ## Evaluation
 
-We compared against the following baselines (detected via inline markdown body scan):
+We compared against the following baselines:
 
 - `mistralai/Mistral-7B-Instruct-v0.3` — baseline 1
 - `Qwen/Qwen2.5-7B-Instruct` — baseline 2
@@ -36,7 +36,3 @@ We compared against the following baselines (detected via inline markdown body s
 
 The adapter was trained using `BAAI/bge-large-en-v1.5` embeddings for retrieval.
 
-## Limitations
-
-Single-segment names like `bert-base-uncased` appearing in the README body are
-**not** detected by the markdown inline rule (requires the `{namespace}/{model-name}` slash form).

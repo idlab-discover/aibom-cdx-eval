@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.extract import extract_model_ids_cyclonedx_many
+from scoring.extract import extract_model_ids_cyclonedx_many, model_claims_cyclonedx_many
 from scoring.score_cdx import score_cdx_paths
 
 
@@ -32,6 +32,10 @@ class TruseraAibomRunner(BaseRunner):
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / "ai-bom.cdx.json"
         return p if p.exists() else None
+
+    @classmethod
+    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        return model_claims_cyclonedx_many(cls.cdx_output_paths(tool_output_dir))[1]
 
     @classmethod
     def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:

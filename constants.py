@@ -99,6 +99,7 @@ K_SUCCESS_RATE                = "success_rate"
 K_FAILURE_RATE                = "failure_rate"
 K_RETRIES_MEAN                = "retries_mean"
 K_DETECTED_IDS                = "detected_ids"
+K_UNIDENTIFIED                = "unidentified_claims"   # model claims naming no model
 K_F1                          = "f1"
 K_PRECISION                   = "precision"
 K_RECALL                      = "recall"
@@ -136,6 +137,8 @@ TOOL_LABELS: dict[str, str] = {
     "akumar-aibom":      "akumar-aibom",
     "jorisbot-aibom":    "jorisbot-aibom",
     "trusera-aibom":     "trusera-aibom",
+    "cdxgen-aibom":      "cdxgen (AI-BOM)",
+    "hts-aibom":         "HTS AiBOM",
 }
 
 # Fixed presentation order for tables and figures.

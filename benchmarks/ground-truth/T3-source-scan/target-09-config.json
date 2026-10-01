@@ -37,5 +37,16 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "HuggingFaceFW/fineweb-edu",
+      "kind": "dataset (config key)",
+      "file": "config.yaml"
+    },
+    {
+      "id": "outputs/bert-ner",
+      "kind": "output directory",
+      "file": "config.yaml"
+    }
+  ]
 }

@@ -173,6 +173,26 @@
       ],
       "reason": "legacy single-segment _name_or_path in a config file (provenance, not usage)",
       "file": "config/model_config.json"
+    },
+    {
+      "id": "./checkpoints/my-finetuned-model",
+      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
+      "file": "src/train.py"
+    },
+    {
+      "id": "/mnt/models/llama-8b",
+      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
+      "file": "src/train.py"
+    },
+    {
+      "id": "../weights/checkpoint-500",
+      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
+      "file": "src/train.py"
+    },
+    {
+      "id": "./checkpoints/step-1000",
+      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
+      "file": "notebooks/exploration.ipynb"
     }
   ],
   "not_models": [
@@ -198,33 +218,13 @@
     },
     {
       "id": "Teacher/student",
-      "kind": "prose",
+      "kind": "prose / string fragment",
       "file": "config/trl_config.yaml"
     },
     {
-      "id": "adapter-repo/name",
-      "kind": "prose",
-      "file": "src/train.py"
-    },
-    {
       "id": "meta-llama/Llama-3",
-      "kind": "prose",
-      "file": "src/train.py"
-    },
-    {
-      "id": "org/model",
-      "kind": "prose",
-      "file": "src/inference.ts"
-    },
-    {
-      "id": "org/repo",
-      "kind": "prose",
-      "file": "src/evaluate_models.py"
-    },
-    {
-      "id": "single/double",
-      "kind": "prose",
-      "file": "src/train.py"
+      "kind": "prose / string fragment",
+      "file": "scripts/download.sh"
     }
   ]
 }

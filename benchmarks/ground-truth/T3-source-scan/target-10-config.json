@@ -28,5 +28,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "acme-research/ner-experiments",
+      "kind": "W&B project",
+      "file": ".env"
+    }
+  ]
 }

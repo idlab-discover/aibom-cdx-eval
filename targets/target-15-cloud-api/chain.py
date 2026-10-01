@@ -6,10 +6,14 @@ Pattern coverage:
   python_literal (ChatOpenAI / ChatAnthropic class call)  → akumar-aibom, jorisbot, trusera
 """
 
+from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
+
+# Knowledge base to retrieve from
+knowledge_base = load_dataset("wikimedia/wikipedia", "20231101.en", split="train")
 
 # ── Local open-weight models (HuggingFace) ────────────────────────────────────
 embed_model = SentenceTransformer("BAAI/bge-small-en-v1.5")

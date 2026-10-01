@@ -16,5 +16,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "pytorch/pytorch",
+      "kind": "container image",
+      "file": "Dockerfile"
+    }
+  ]
 }

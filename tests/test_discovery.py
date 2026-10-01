@@ -70,7 +70,9 @@ def _bom(*components, meta=None):
     return {"bomFormat": "CycloneDX", "metadata": {"component": meta or {}}, "components": list(components)}
 
 
-def test_cyclonedx_extraction_counts_only_model_components(tmp_path: Path):
+def test_cyclonedx_claims_split_identified_and_unidentified(tmp_path: Path):
+    from scoring.extract import model_claims_cyclonedx
+
     bom = _bom(
         {"type": "data", "name": "bookcorpus/bookcorpus"},
         {"type": "framework", "name": "hf/transformers"},
@@ -83,7 +85,59 @@ def test_cyclonedx_extraction_counts_only_model_components(tmp_path: Path):
     )
     p = tmp_path / "bom.json"
     p.write_text(json.dumps(bom))
-    assert extract_model_ids_cyclonedx(p) == ["org/meta-model", "gpt-4o", "a/b"]
+    ids, unidentified = model_claims_cyclonedx(p)
+    assert ids == ["org/meta-model", "gpt-4o", "a/b"]          # data/framework never count
+    assert unidentified == ["HuggingFace Transformers"]           # names no model: reported, not scored
+    assert extract_model_ids_cyclonedx(p) == ids
+
+
+def test_cdxgen_style_group_name_and_local_paths(tmp_path: Path):
+    from scoring.extract import model_claims_cyclonedx
+
+    bom = _bom(
+        {"type": "machine-learning-model", "group": "openai", "name": "gpt-4o"},
+        {"type": "machine-learning-model", "group": "ai", "name": "./checkpoints/my-model"},
+        {"type": "machine-learning-model", "group": "google-bert", "name": "bert-base-uncased"},
+    )
+    p = tmp_path / "bom.json"
+    p.write_text(json.dumps(bom))
+    ids, unidentified = model_claims_cyclonedx(p)
+    assert ids == ["openai/gpt-4o", "./checkpoints/my-model", "google-bert/bert-base-uncased"]
+    assert unidentified == []
+    # a model purl marks a no-org name as an ID; a package purl does not
+    bom2 = _bom(
+        {"type": "machine-learning-model", "name": "GPT-4o", "purl": "pkg:generic/GPT-4o"},
+        {"type": "machine-learning-model", "name": "transformers", "purl": "pkg:pypi/transformers"},
+        {"type": "machine-learning-model", "name": "Transformers dependency"},
+    )
+    p.write_text(json.dumps(bom2))
+    assert model_claims_cyclonedx(p) == (["GPT-4o"], ["transformers", "Transformers dependency"])
+    # provider-prefixed cloud model matches a ground-truth id without org
+    assert match_detections(["openai/gpt-4o"], gt(["gpt-4o"])).tp_ids == ("gpt-4o",)
+
+
+def test_jorisbot_keeps_every_provider(tmp_path: Path):
+    from scoring.extract import model_claims_jorisbot
+
+    p = tmp_path / "report.json"
+    p.write_text(json.dumps({"models": [
+        {"name": "gpt-4o", "provider": "openai"},
+        {"name": "org/model", "provider": "huggingface"},
+        {"name": "pytorch", "provider": "pytorch"},
+    ]}))
+    assert model_claims_jorisbot(p) == (["gpt-4o", "org/model"], ["pytorch"])
+
+
+def test_akumar_unknown_model_is_unidentified(tmp_path: Path):
+    from scoring.extract import model_claims_akumar
+
+    p = tmp_path / "AI_BOM.json"
+    p.write_text(json.dumps({"models": [
+        {"model": "gpt-4o", "type": "ChatOpenAI"},
+        {"model": "unknown", "type": "Ollama"},
+        {"model": "unknown", "type": "Ollama"},
+    ]}))
+    assert model_claims_akumar(p) == (["gpt-4o"], ["Ollama"])
 
 
 def test_ground_truth_files_validate_against_targets():

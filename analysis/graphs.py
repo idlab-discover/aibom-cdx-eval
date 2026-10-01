@@ -8,8 +8,8 @@ Figures (input type = what the tool was given):
   fig1_t1_throughput_boxplot         HF model-ID input   T1 throughput distribution
   fig2_t1_boxplot                    HF model-ID input   T1 generation-time distribution
   fig3_t2_reliability                HF model-ID input   T2 share of models that succeed / fail
-  fig4a_t3_discovery_all             Source-code scan    T3 precision / recall / F1, all targets
-  fig4b_t3_discovery_python  …_mixed  …_config  …_cloud_api               (one file per scope)
+  fig4a_t3_discovery                 Source-code scan    T3 precision / recall / F1, all targets
+  fig4b_t3_recall_by_scope           Source-code scan    T3 recall per target scope
   fig5a_t4_conformance_model_id / _source_scan      CycloneDX conformance pass rate
   fig5b_t4_completeness_model_id / _source_scan     full-BOM completeness and breadth
   fig5c_t4_model_completeness_model_id / _source_scan   model-component completeness
@@ -46,6 +46,7 @@ import numpy as np
 
 from constants import (
     AGGREGATED_DIR,
+    EVAL_ROOT,
     EC_CRASH,
     EC_GATED_OR_UNAUTHORIZED,
     FIGURES_DIR,
@@ -86,6 +87,8 @@ PALETTE: dict[str, str] = {
     "akumar-aibom":      "#9467bd",
     "jorisbot-aibom":    "#8c564b",
     "trusera-aibom":     "#e377c2",
+    "cdxgen-aibom":      "#17becf",
+    "hts-aibom":         "#bcbd22",
 }
 
 # Shade = metric: share of white blended into the tool colour (0 = the tool colour itself).
@@ -104,7 +107,7 @@ _SUBTITLE_INK = "#555555"
 T1_TOOLS      = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T2_TOOLS      = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
 T4_MODELID_TOOLS = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
-T4_SCAN_TOOLS    = ["aibomgen-cli", "akumar-aibom", "trusera-aibom"]
+T4_SCAN_TOOLS    = ["aibomgen-cli", "akumar-aibom", "trusera-aibom", "cdxgen-aibom", "hts-aibom"]
 
 # (summary sub-task, tools, file-name suffix) for figures drawn once per input type.
 _T4_INPUTS = [
@@ -544,32 +547,126 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
 # ================================================================== #
 
 _T3_SCOPES = [
-    # (file suffix, summary key suffix, subtitle)
-    ("all",       "",            f"{INPUT_LABEL_SCAN} — all targets"),
-    ("python",    "_scope_python",    f"{INPUT_LABEL_SCAN} — Python targets"),
-    ("mixed",     "_scope_mixed",     f"{INPUT_LABEL_SCAN} — mixed targets"),
-    ("config",    "_scope_config",    f"{INPUT_LABEL_SCAN} — config targets"),
-    ("cloud_api", "_scope_cloud_api", f"{INPUT_LABEL_SCAN} — cloud-API targets"),
+    # (summary key suffix, x-axis label)
+    ("_scope_python",    "Python"),
+    ("_scope_mixed",     "Mixed"),
+    ("_scope_config",    "Config files"),
+    ("_scope_cloud_api", "Cloud API"),
 ]
 
 
 def _fig4_t3_discovery(S: dict, out: Path) -> None:
-    """Figure 4 — T3: pooled F1 / precision / recall, one file per target scope.
+    """Figure 4a — T3: pooled precision / recall / F1 over all targets.
 
     Bars are micro (pooled over targets) scores; whiskers are the 95 % bootstrap
     CI over targets.  Shade = metric (dark F1, mid precision, light recall).
     """
     tools = [t for t in TOOL_ORDER if f"{t}::{SUBTASK_T3}" in S]
-    for i, (suffix, key_sfx, subtitle) in enumerate(_T3_SCOPES):
-        series = [
-            Series(f"f1{key_sfx}",        "F1",        "dark",  err="ci"),
-            Series(f"precision{key_sfx}", "Precision", "mid",   err="ci"),
-            Series(f"recall{key_sfx}",    "Recall",    "light", err="ci"),
-        ]
-        _grouped_bar_figure(
-            S, out, f"fig4{'abcde'[i]}_t3_discovery_{suffix}", SUBTASK_T3, tools, series,
-            ylabel="Score", subtitle=subtitle, figsize=(5.0, 3.6), ylim=(0, 1.05),
-        )
+    series = [
+        Series("f1",        "F1",        "dark",  err="ci"),
+        Series("precision", "Precision", "mid",   err="ci"),
+        Series("recall",    "Recall",    "light", err="ci"),
+    ]
+    _grouped_bar_figure(
+        S, out, "fig4a_t3_discovery", SUBTASK_T3, tools, series,
+        ylabel="Score", subtitle=f"{INPUT_LABEL_SCAN} — all targets",
+        figsize=(5.0, 3.6), ylim=(0, 1.05),
+    )
+    _fig4b_t3_recall_by_scope(S, out, tools)
+
+
+_CLAIMS_PATH = EVAL_ROOT / "benchmarks" / "tool-claims.yaml"
+_SCOPE_KEYS = {"_scope_python": "python", "_scope_mixed": "mixed",
+               "_scope_config": "config", "_scope_cloud_api": "cloud_api"}
+# Claim marker under each bar: what the tool's own documentation says it supports.
+_CLAIM_STYLE = {
+    "yes":     dict(marker="o", markersize=5.5, markerfacecolor="black", markeredgecolor="black"),
+    "partial": dict(marker="o", markersize=5.5, fillstyle="left", markerfacecolor="black",
+                    markerfacecoloralt="white", markeredgecolor="black"),
+    "no":      dict(marker="o", markersize=5.5, markerfacecolor="white", markeredgecolor="black"),
+}
+_CLAIM_LABEL = {"yes": "claims support", "partial": "claims partial support", "no": "no claim"}
+
+
+def _load_claims() -> dict[str, dict[str, str]]:
+    """tool -> scope -> yes|partial|no, from benchmarks/tool-claims.yaml."""
+    try:
+        import yaml
+
+        raw = yaml.safe_load(_CLAIMS_PATH.read_text()) or {}
+    except Exception:
+        return {}
+    def norm(value: Any) -> str:
+        # YAML 1.1 reads bare yes/no as booleans.
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        return str(value or "").strip().lower()
+
+    return {
+        tool: {scope: norm((v or {}).get("claim")) for scope, v in scopes.items()}
+        for tool, scopes in raw.items() if isinstance(scopes, dict)
+    }
+
+
+def _fig4b_t3_recall_by_scope(S: dict, out: Path, tools: list[str]) -> None:
+    """Figure 4b — T3: recall per target scope, with each tool's documented claim.
+
+    x = scope, one bar per tool in its own colour, value on each bar.  Under each
+    bar a marker shows what the tool's documentation claims for that scope
+    (filled = claims support, half = partial, open = no claim; source:
+    benchmarks/tool-claims.yaml), so a low bar outside a tool's stated scope is
+    distinguishable from a miss inside it.  Precision is not split by scope:
+    per scope it rests on a handful of detections.
+    """
+    stem = "fig4b_t3_recall_by_scope"
+    if not tools:
+        click.echo(f"  Skipped {stem} (no data)")
+        return
+    claims = _load_claims()
+    fig, ax = plt.subplots(figsize=(6.0, 3.8))
+    x = np.arange(len(_T3_SCOPES))
+    width = 0.8 / len(tools)
+    marker_y = -0.07
+    for i, tool in enumerate(tools):
+        vals = [_entry_mean(_metric_entry(S, tool, SUBTASK_T3, f"recall{k}")) or 0.0 for k, _ in _T3_SCOPES]
+        xs = x + (i - (len(tools) - 1) / 2) * width
+        ax.bar(xs, vals, width=width, color=PALETTE[tool], edgecolor="white", linewidth=0.6,
+               label=TOOL_LABELS[tool])
+        _label_bars(ax, xs, vals, lambda v: f"{v:.2f}", pad=0.012, fontsize=6.5, rotation=90)
+        for xi, (key, _) in zip(xs, _T3_SCOPES):
+            claim = claims.get(tool, {}).get(_SCOPE_KEYS[key])
+            if claim in _CLAIM_STYLE:
+                ax.plot([xi], [marker_y], linestyle="none", clip_on=False, **_CLAIM_STYLE[claim])
+    ax.axhline(0, color=_INK, linewidth=0.8)
+    ax.spines["bottom"].set_visible(False)
+    ax.set_xticks(x)
+    ax.set_xticklabels([label for _, label in _T3_SCOPES])
+    ax.tick_params(axis="x", length=0, pad=14)
+    ax.set_ylabel("Recall")
+    ax.set_ylim(-0.12, 1.12)
+    ax.set_yticks(np.linspace(0, 1, 6))
+    ax.spines["left"].set_bounds(0, 1.0)
+    _subtitle(ax, f"{INPUT_LABEL_SCAN} — recall by target scope")
+    fig.tight_layout()
+
+    tool_handles = [mpatches.Patch(facecolor=PALETTE[t], edgecolor="white", label=TOOL_LABELS[t]) for t in tools]
+    claim_handles = [plt.Line2D([0], [0], linestyle="none", label=_CLAIM_LABEL[c], **_CLAIM_STYLE[c])
+                     for c in ("yes", "partial", "no")]
+    y0 = _below_axes_anchor(fig, ax)
+    ncol = len(tools) if len(tools) <= 4 else 3        # wrap so the legend never widens the figure
+    rows = -(-len(tools) // ncol)
+    leg1 = ax.legend(handles=tool_handles, ncol=ncol, loc="upper center", frameon=False,
+                     fontsize=7, bbox_to_anchor=(0.5, y0), handlelength=1.4, columnspacing=1.2)
+    ax.add_artist(leg1)
+    leg2 = ax.legend(handles=claim_handles, ncol=3, loc="upper center", frameon=False, fontsize=7,
+                     bbox_to_anchor=(0.5, y0 - 0.045 - 0.04 * rows), handlelength=1.0, columnspacing=1.4,
+                     title="Documented support (marker under each bar)", title_fontsize=7)
+    for leg in (leg1, leg2):
+        for text in leg.get_texts():
+            text.set_color(_INK)
+    _save_figure(fig, out, stem)
+    plt.close(fig)
+    click.echo(f"  Saved {stem}.pdf/.png")
 
 
 # ================================================================== #

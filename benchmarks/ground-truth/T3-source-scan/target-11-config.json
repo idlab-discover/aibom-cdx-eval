@@ -43,5 +43,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "allenai/c4",
+      "kind": "dataset (config key)",
+      "file": "pyproject.toml"
+    }
+  ]
 }

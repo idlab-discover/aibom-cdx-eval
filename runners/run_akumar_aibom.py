@@ -16,7 +16,7 @@ from typing import Any
 
 from constants import EVAL_ROOT
 from runners.base_runner import BaseRunner
-from scoring.extract import extract_model_ids_akumar
+from scoring.extract import extract_model_ids_akumar, model_claims_akumar
 from scoring.score_cdx import score_cdx_paths
 
 
@@ -91,6 +91,10 @@ class AkumarAibomRunner(BaseRunner):
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / "AI_BOM.json"
         return p if p.exists() else None
+
+    @classmethod
+    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        return model_claims_akumar(tool_output_dir / "AI_BOM.json")[1]
 
     @classmethod
     def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:

@@ -22,5 +22,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "acme-corp/ai-app",
+      "kind": "GitHub repository (package.json)",
+      "file": "package.json"
+    }
+  ]
 }

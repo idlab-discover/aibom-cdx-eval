@@ -28,5 +28,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "sentence-transformers/natural-questions",
+      "kind": "dataset (load_dataset), same org as a model",
+      "file": "embed.py"
+    }
+  ]
 }

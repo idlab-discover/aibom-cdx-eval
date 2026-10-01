@@ -24,6 +24,7 @@ from constants import (
     EVAL_ROOT,
     K_DETECTED_IDS,
     K_ERROR_CLASS,
+    K_UNIDENTIFIED,
 )
 
 from scoring.score_discovery import score_discovery       # noqa: E402
@@ -171,12 +172,20 @@ class BaseRunner(abc.ABC):
         return None
 
     @classmethod
+    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        """Model claims that name no model (reported separately, not scored)."""
+        return []
+
+    @classmethod
     def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
         """CycloneDX files to score for T4 (default: every top-level JSON file)."""
         return sorted(tool_output_dir.glob("*.json"))
 
     def _discovery_scores(self, detected: list[str]) -> dict[str, Any]:
-        scores: dict[str, Any] = {K_DETECTED_IDS: detected}
+        scores: dict[str, Any] = {
+            K_DETECTED_IDS: detected,
+            K_UNIDENTIFIED: self.unidentified_from_output_dir(self.tool_output_dir),
+        }
         gt_path = resolve_ground_truth_path(
             self.task_config.get("current_dataset_ground_truth") or None, EVAL_ROOT
         )

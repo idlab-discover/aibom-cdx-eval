@@ -13,11 +13,12 @@
 #
 # Tool groups (never compare across groups):
 #   HF model-ID input : aibomgen-cli (generate), OWASP aibom-generator, ALOHA, lab700xorg-aisbom
-#   Source-code scan  : aibomgen-cli (scan), akumar-aibom, jorisbot-aibom, trusera-aibom
+#   Source-code scan  : aibomgen-cli (scan), akumar-aibom, jorisbot-aibom, trusera-aibom,
+#                       cdxgen-aibom (OWASP cdxgen, AI-BOM mode), hts-aibom
 #
 # CycloneDX-capable (eligible for T4):
 #   T4-MODELID : aibomgen-cli, OWASP aibom-generator, ALOHA, lab700xorg-aisbom
-#   T4-SCAN    : aibomgen-cli, akumar-aibom, trusera-aibom
+#   T4-SCAN    : aibomgen-cli, akumar-aibom, trusera-aibom, cdxgen-aibom, hts-aibom
 # ============================================================
 
 run:
@@ -119,6 +120,30 @@ tools:
     runtime: uv
     path: "tools/trusera-aibom"
     entry: ["uv", "run", "ai-bom"]
+    tasks: ["T3_T4"]
+    output_format: cyclonedx-json
+    cdx_capable: true
+    t4_inputs: ["source-scan"]
+    optional: false
+
+  cdxgen-aibom:
+    id: cdxgen-aibom
+    display_name: "cdxgen (AI-BOM)"
+    runtime: node
+    path: "tools/cdxgen"            # npm project pinning @cyclonedx/cdxgen (see its package.json)
+    tasks: ["T3_T4"]
+    output_format: cyclonedx-json
+    cdx_capable: true
+    t4_inputs: ["source-scan"]
+    optional: false
+    notes: "OWASP CycloneDX generator, `aibom` command (project type `ai`). Needs Node.js >= 20."
+
+  hts-aibom:
+    id: hts-aibom
+    display_name: "HTS AiBOM"
+    runtime: uv
+    path: "tools/hts-aibom"
+    entry: ["uv", "run", "python", "-m", "aibom"]
     tasks: ["T3_T4"]
     output_format: cyclonedx-json
     cdx_capable: true

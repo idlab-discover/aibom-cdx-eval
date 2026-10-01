@@ -1,6 +1,6 @@
 """
 Runner for jorisbot-aibom.
-Task: T3 — `uv run aibom scan <source_dir> --output <file> --format json`
+Task: T3_T4 — `uv run aibom scan <source_dir> --output <file> --format json`
 Output: Custom JSON {models[{name, provider, model_card_url, detected_in}], datasets[], ...}
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.extract import extract_model_ids_jorisbot
+from scoring.extract import extract_model_ids_jorisbot, model_claims_jorisbot
 
 
 class JorisbotAibomRunner(BaseRunner):
@@ -31,6 +31,10 @@ class JorisbotAibomRunner(BaseRunner):
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / "report.json"
         return p if p.exists() else None
+
+    @classmethod
+    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        return model_claims_jorisbot(tool_output_dir / "report.json")[1]
 
     @classmethod
     def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:

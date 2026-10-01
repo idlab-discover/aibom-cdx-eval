@@ -43,5 +43,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "nvidia/cuda",
+      "kind": "container image",
+      "file": "infra/values.yaml"
+    }
+  ]
 }

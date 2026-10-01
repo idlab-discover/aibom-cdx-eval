@@ -16,3 +16,6 @@
 [submodule "tools/cisco-aibom"]
 	path = tools/cisco-aibom
 	url = https://github.com/cisco-ai-defense/aibom.git
+[submodule "tools/hts-aibom"]
+	path = tools/hts-aibom
+	url = https://github.com/Hts-Public-Fork/aibom.git

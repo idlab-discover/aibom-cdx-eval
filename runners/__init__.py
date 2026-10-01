@@ -9,6 +9,8 @@ from runners.run_lab700xorg_aisbom import Lab700xorgAisbomRunner
 from runners.run_akumar_aibom import AkumarAibomRunner
 from runners.run_jorisbot_aibom import JorisbotAibomRunner
 from runners.run_trusera_aibom import TruseraAibomRunner
+from runners.run_cdxgen_aibom import CdxgenAibomRunner
+from runners.run_hts_aibom import HtsAibomRunner
 
 REGISTRY: dict = {
     "aibomgen-cli":      AibomgenCliRunner,
@@ -18,4 +20,6 @@ REGISTRY: dict = {
     "akumar-aibom":      AkumarAibomRunner,
     "jorisbot-aibom":    JorisbotAibomRunner,
     "trusera-aibom":     TruseraAibomRunner,
+    "cdxgen-aibom":      CdxgenAibomRunner,
+    "hts-aibom":         HtsAibomRunner,
 }

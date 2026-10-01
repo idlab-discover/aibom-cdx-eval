@@ -16,5 +16,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "stanfordnlp/imdb",
+      "kind": "dataset (load_dataset)",
+      "file": "src/use_dataset.py"
+    }
+  ]
 }

@@ -1,7 +1,4 @@
 # requirements.txt
-# NOTE: .txt extension is NOT scanned by the scanner (only metadata files with
-# specific patterns are matched). Model IDs appearing here are NOT detected.
-# This is intentional – pip package names != HF model IDs.
 
 torch>=2.3.0
 transformers>=4.47.0

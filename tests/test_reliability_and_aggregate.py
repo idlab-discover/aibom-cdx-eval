@@ -78,3 +78,21 @@ def test_legacy_names_are_read():
     from constants import LEGACY_ERROR_CLASSES, LEGACY_TASK_IDS
     assert LEGACY_TASK_IDS["T3_T4G2"] == "T3_T4"
     assert LEGACY_ERROR_CLASSES["unauthorized_download"] == "gated_or_unauthorized"
+
+
+def test_tables_and_report_are_written(tmp_path, monkeypatch):
+    from scoring import aggregate
+
+    monkeypatch.setattr(aggregate, "AGGREGATED_DIR", tmp_path)
+    recs = [
+        _rec("aibomgen-cli", "T1_T2", "popular", "org/m", repeat=1),
+        _rec("aibomgen-cli", "T3_T4", "target-06-mixed", detected=["Xenova/bert-base-NER"]),
+    ]
+    summary = _build_summary(recs, baselines={"aibomgen-cli": 0.01})
+    aggregate._write_other_tables("r", summary)
+    aggregate._write_report("r", summary)
+    data = tmp_path / "data" / "r"
+    assert (data / "r_t1_performance.csv").read_text().startswith("tool,label,runs")
+    assert (data / "r_t2_reliability.csv").exists()
+    report = (data / "r_report.md").read_text()
+    assert "### T1: performance" in report and "### T3: model discovery" in report

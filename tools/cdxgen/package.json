@@ -1,0 +1,8 @@
+{
+  "name": "aibomgen-eval-cdxgen",
+  "private": true,
+  "description": "Pinned cdxgen used by the aibomgen-cli evaluation (AI-BOM mode for T3).",
+  "dependencies": {
+    "@cyclonedx/cdxgen": "12.8.5"
+  }
+}

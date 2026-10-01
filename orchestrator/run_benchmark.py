@@ -216,7 +216,7 @@ def rescore(run_id: str, results_dir: str) -> None:
     """Recompute scores in stored metrics.json from the saved tool outputs
     (no tool re-execution): T3 detections + discovery, multi-BOM CycloneDX
     scores, error classes and legacy task names.  Run `aggregate` afterwards."""
-    from constants import K_DETECTED_IDS, K_ERROR_CLASS, EC_SUCCESS_EMPTY
+    from constants import EC_SUCCESS_EMPTY, K_DETECTED_IDS, K_ERROR_CLASS, K_UNIDENTIFIED
     from runners import REGISTRY
     from runners.base_runner import _read_tail
     from scoring.ground_truth import ground_truth_path
@@ -253,14 +253,21 @@ def rescore(run_id: str, results_dir: str) -> None:
             record["success"], record["error_message"] = True, None
             scores[K_ERROR_CLASS] = EC_SUCCESS_EMPTY
 
-        cdx = score_cdx_paths(runner_cls.cdx_output_paths(tool_output_dir))
-        scores.update(cdx)
+        # Like the run itself: only a successful run is scored for T4. A failed run can
+        # still leave a stub BOM behind (ALOHA does for gated models); drop any such
+        # scores so failures never enter the CycloneDX statistics.
+        if record.get("success"):
+            scores.update(score_cdx_paths(runner_cls.cdx_output_paths(tool_output_dir)))
+        else:
+            for key in [k for k in scores if k.startswith("cdx_")]:
+                del scores[key]
 
         if task == TASK_T3_T4:
             detected = runner_cls.detections_from_output_dir(tool_output_dir)
             gt_path = ground_truth_path(record["dataset"])
             if detected is not None:
                 scores[K_DETECTED_IDS] = detected
+                scores[K_UNIDENTIFIED] = runner_cls.unidentified_from_output_dir(tool_output_dir)
                 if gt_path.exists():
                     scores.update(score_discovery(detected, gt_path))
 
@@ -297,24 +304,28 @@ def _write_run_meta(
     import datetime
 
     meta_path = run_dir / "run_meta.json"
-    if meta_path.exists() or not jobs:
+    if not jobs:
+        return
+    if meta_path.exists():
+        # A resumed or partial re-run keeps the original metadata and appends a record,
+        # so it stays visible which jobs ran later, from which framework commit.
+        meta = json.loads(meta_path.read_text())
+        # Tools that join the run later get their version and baseline recorded too.
+        new_tools, new_baselines = _tool_versions_and_baselines(
+            [j for j in jobs if j["tool"] not in meta.get("tools", {})], cfg)
+        meta.setdefault("tools", {}).update(new_tools)
+        meta.setdefault("baselines", {}).update(new_baselines)
+        meta.setdefault("reruns", []).append({
+            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "framework_commit": _git_head(EVAL_ROOT),
+            "n_jobs": len(jobs),
+            "tasks": sorted({j["task"] for j in jobs}),
+            "tools": sorted({j["tool"] for j in jobs}),
+        })
+        meta_path.write_text(json.dumps(meta, indent=2))
         return
 
-    from runners import REGISTRY
-
-    tools: dict[str, dict] = {}
-    baselines: dict[str, dict] = {}
-    samples_n = int((cfg.get("run") or {}).get("baseline_samples", 5))
-    seen: set[str] = set()
-    for job in jobs:
-        tool_id = job["tool"]
-        if tool_id in seen or tool_id not in REGISTRY:
-            continue
-        seen.add(tool_id)
-        runner = REGISTRY[tool_id](job["tool_config"], job["task_config"])
-        version, commit = runner.get_version()
-        tools[tool_id] = {"version": version, "commit": commit}
-        baselines[tool_id] = _measure_baseline(runner, samples_n)
+    tools, baselines = _tool_versions_and_baselines(jobs, cfg)
 
     meta = {
         "run_id": run_id,
@@ -333,6 +344,24 @@ def _write_run_meta(
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
+
+
+def _tool_versions_and_baselines(jobs: list, cfg: dict) -> tuple[dict, dict]:
+    """Version/commit and start-up baseline for every distinct tool in ``jobs``."""
+    from runners import REGISTRY
+
+    tools: dict[str, dict] = {}
+    baselines: dict[str, dict] = {}
+    samples_n = int((cfg.get("run") or {}).get("baseline_samples", 5))
+    for job in jobs:
+        tool_id = job["tool"]
+        if tool_id in tools or tool_id not in REGISTRY:
+            continue
+        runner = REGISTRY[tool_id](job["tool_config"], job["task_config"])
+        version, commit = runner.get_version()
+        tools[tool_id] = {"version": version, "commit": commit}
+        baselines[tool_id] = _measure_baseline(runner, samples_n)
+    return tools, baselines
 
 
 def _measure_baseline(runner, samples_n: int) -> dict:

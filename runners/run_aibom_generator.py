@@ -1,6 +1,6 @@
 """
-Runner for aibom-generator (OWASP).
-Task: T1 — `uv run python -m src.cli <model_id> --output <file>`
+Runner for the OWASP aibom-generator.
+Task: T1_T2 — `uv run python -m src.cli <model_id> --output <file>`
 Output: CycloneDX 1.6 JSON written directly to --output path.
 """
 
@@ -29,6 +29,14 @@ class AibomGeneratorRunner(BaseRunner):
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / "aibom.json"
         return p if p.exists() else None
+
+    @classmethod
+    def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
+        # The tool also writes aibom_1_7.json, the same BOM re-labelled as 1.7.
+        # Only the requested --output file is scored, so the tool gets one BOM
+        # per model like every other tool.
+        p = tool_output_dir / "aibom.json"
+        return [p] if p.exists() else []
 
     def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
         if output_path is None:

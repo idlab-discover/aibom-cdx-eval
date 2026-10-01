@@ -10,3 +10,5 @@ services:
     environment:
       - BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
       - EMBED_MODEL=sentence-transformers/all-MiniLM-L12-v2
+  cache:
+    image: redis/redis-stack-server:latest

@@ -3,3 +3,5 @@ models:
   default: gpt-4o-mini
   # Embedding model for vector search
   embedding: text-embedding-3-small
+  # Prompt templates are versioned in a separate GitHub repo
+prompts_repo: "acme-ai/agent-prompts"

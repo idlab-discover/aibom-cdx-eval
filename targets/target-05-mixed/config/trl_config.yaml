@@ -1,14 +1,12 @@
 # TRL / SFTTrainer config (used with `trl sft` CLI or TrainingArguments)
 #
-# Scanner should detect: model_name_or_path, model, hub_model_id
-# Scanner should NOT detect: single-segment keys like "output_dir", "run_name"
 
-model_name_or_path: Qwen/Qwen2.5-7B-Instruct   # detected
-hub_model_id: my-org/qwen2.5-7b-sft             # detected
+model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+hub_model_id: my-org/qwen2.5-7b-sft
 
 # Teacher/student distillation setup (TRL GKD)
-teacher_model_name_or_path: Qwen/Qwen2.5-72B-Instruct  # detected
-student_model_name_or_path: Qwen/Qwen2.5-7B-Instruct   # detected (same as base, deduplicated)
+teacher_model_name_or_path: Qwen/Qwen2.5-72B-Instruct
+student_model_name_or_path: Qwen/Qwen2.5-7B-Instruct
 
 dataset_name: HuggingFaceH4/ultrachat_200k
 

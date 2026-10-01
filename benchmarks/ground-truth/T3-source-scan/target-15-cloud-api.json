@@ -31,5 +31,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "wikimedia/wikipedia",
+      "kind": "dataset (load_dataset)",
+      "file": "chain.py"
+    }
+  ]
 }

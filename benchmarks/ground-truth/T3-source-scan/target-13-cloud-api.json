@@ -28,5 +28,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "redis/redis-stack-server",
+      "kind": "container image",
+      "file": "docker-compose.yml"
+    }
+  ]
 }

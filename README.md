@@ -9,11 +9,13 @@ Task-driven benchmarking framework for comparing `aibomgen-cli` against peer AIB
 - Python 3.11+ with [uv](https://docs.astral.sh/uv/)
 - Go binary: `aibomgen-cli` (built from [idlab-discover/aibomgen-cli](https://github.com/idlab-discover/aibomgen-cli), installed at `/home/ubuntu/go/bin/aibomgen-cli`; its source checkout is `source_repo` in `orchestrator/config.yaml`, so the built commit is recorded with every run)
 - A HuggingFace API token (read-only scope) — stored in `.env` (see below)
+- Node.js ≥ 20 for cdxgen (installed here: Node 22 LTS from the official nodejs.org tarball)
 
 ```bash
 cd aibomgen-cli-eval
 git submodule update --init --recursive   # pull tool submodules
 uv sync                                    # install Python deps into .venv
+(cd tools/cdxgen && npm ci || npm install)  # pinned cdxgen (tools/cdxgen/package.json)
 uv run pytest tests                        # scorer, matcher and ground-truth tests
 ```
 
@@ -42,9 +44,16 @@ A shell export always takes precedence over `.env` if both are set.
 | `akumar-aibom` | [akumar0205/AIBOM](https://github.com/akumar0205/AIBOM) | Source directory | T3\_T4 | ✓ |
 | `jorisbot-aibom` | [jorisbot288-boop/aibom](https://github.com/jorisbot288-boop/aibom) | Source directory | T3\_T4 | ✗ (custom JSON) |
 | `trusera-aibom` | [Trusera/ai-bom](https://github.com/Trusera/ai-bom) | Source directory | T3\_T4 | ✓ |
+| `cdxgen-aibom` (**cdxgen (AI-BOM)**) | [cdxgen/cdxgen](https://github.com/cdxgen/cdxgen) (OWASP CycloneDX generator), npm `@cyclonedx/cdxgen` 12.8.5 in `tools/cdxgen/` | Source directory (`aibom` command) | T3\_T4 | ✓ |
+| `hts-aibom` (**HTS AiBOM**) | [Hts-Public-Fork/aibom](https://github.com/Hts-Public-Fork/aibom) v0.2.0 | Source directory | T3\_T4 | ✓ |
 | `cisco-aibom` | [cisco-ai-defense/aibom](https://github.com/cisco-ai-defense/aibom) | n/a | n/a (requires LLM API key) | n/a |
 
-Tools are git submodules (except `ALOHA`, which has no upstream repo) pinned to the commits used during the evaluation. Tool IDs (the first column) are folder names and CLI arguments; figures and tables use the display names from `constants.TOOL_LABELS`.
+Tools are git submodules pinned to the commits used during the evaluation, except `ALOHA` (bundled; no upstream repo) and cdxgen (an npm package pinned in `tools/cdxgen/package.json`; run with `--no-install-deps` so it never installs a target's dependencies).
+
+**Tools considered but not included.**
+- `cisco-aibom` is a source scanner, but its `analyze` command always needs an LLM (paid API key, or a local model that this evaluation host cannot run), and its results then depend on the chosen LLM.
+- Snyk's `snyk aibom` is proprietary and needs a Snyk account.
+- `lab700xorg-aisbom` scans model artefacts, not source code, so it takes part in T1/T2 only. Tool IDs (the first column) are folder names and CLI arguments; figures and tables use the display names from `constants.TOOL_LABELS`.
 
 Every run records the version and commit of each tool in `results/runs/<run-id>/run_meta.json` (bundled ALOHA is identified by a hash of `ALOHA.py`).
 
@@ -59,7 +68,7 @@ Each tool invocation is tagged as one of two execution tasks, named after their 
 | Task | Input | Tools | Dataset |
 |---|---|---|---|
 | **T1\_T2** | HF model ID → AIBOM | aibomgen-cli, OWASP aibom-generator, ALOHA, lab700xorg-aisbom | `popular` (top 500 HF models by downloads), capped at `--limit` per run (default 100) |
-| **T3\_T4** | Source-code directory → AIBOM | aibomgen-cli, akumar-aibom, jorisbot-aibom, trusera-aibom | 16 synthetic targets in four scopes: `python` (01–04), `mixed` (05–08), `config` (09–12), `cloud_api` (13–16) |
+| **T3\_T4** | Source-code directory → AIBOM | aibomgen-cli, akumar-aibom, jorisbot-aibom, trusera-aibom, cdxgen (AI-BOM), HTS AiBOM | 16 synthetic targets in four scopes: `python` (01–04), `mixed` (05–08), `config` (09–12), `cloud_api` (13–16) |
 
 Runs of eval-001/002 stored the scan task as `T3_T4G2`; the aggregator reads that name as `T3_T4`.
 
@@ -69,7 +78,7 @@ Runs of eval-001/002 stored the scan task as `T3_T4G2`; the aggregator reads tha
 |---|---|---|---|
 | **T1** | T1\_T2 | duration (median, IQR, CI) | AIBOM generation performance; throughput (fields/s) is secondary |
 | **T2** | T1\_T2 | share of models that succeed | Reliability and error classes, counted per unique model |
-| **T3** | T3\_T4 | pooled (micro) F1 with 95 % CI | Model discovery precision / recall, all four scanners including jorisbot |
+| **T3** | T3\_T4 | pooled (micro) F1 with 95 % CI | Model discovery precision / recall, all six scanners (jorisbot included) |
 | **T4-MODELID** | T1\_T2 (CycloneDX tools) | completeness / conformance | CycloneDX quality of BOMs built from **HF model IDs** |
 | **T4-SCAN** | T3\_T4 (CycloneDX tools) | completeness / conformance | CycloneDX quality of BOMs built from **source-code scans** |
 
@@ -109,12 +118,14 @@ uv run eval aggregate --run-id eval-007
 # Outputs:
 #   results/aggregated/data/eval-007/eval-007_summary.json
 #   results/aggregated/data/eval-007/eval-007_t3_scope_{full,python,mixed,config,cloud_api}.{json,csv}
+#   results/aggregated/data/eval-007/eval-007_{t1_performance,t2_reliability,t4_model_id,t4_source_scan}.csv
+#   results/aggregated/data/eval-007/eval-007_report.md       every headline table in one file
 #   results/aggregated/figures/eval-007/   (every figure as .pdf and .png)
 #     fig1_t1_throughput_boxplot                   HF model-ID input   T1 throughput
 #     fig2_t1_boxplot                              HF model-ID input   T1 generation time
 #     fig3_t2_reliability                          HF model-ID input   T2 share of models that succeed
-#     fig4a_t3_discovery_all                       Source-code scan    T3 F1 / precision / recall
-#     fig4b … fig4e  _python / _mixed / _config / _cloud_api          … per target scope
+#     fig4a_t3_discovery                           Source-code scan    T3 precision / recall / F1
+#     fig4b_t3_recall_by_scope                     Source-code scan    T3 recall per target scope (+ documented-claim marker per bar)
 #     fig5a_t4_conformance_model_id / _source_scan          CycloneDX conformance pass rate
 #     fig5b_t4_completeness_model_id / _source_scan         full-BOM completeness and breadth
 #     fig5c_t4_model_completeness_model_id / _source_scan   model-component completeness
@@ -129,7 +140,7 @@ uv run pytest tests
 - No titles (the LaTeX caption provides them); the only title is a subtitle naming the input type, and for T3 the target scope.
 - One encoding everywhere: **colour = tool**, **shade = metric** (dark → light), **diagonal hatch = CycloneDX v1.7** (solid = v1.6). Hatching means nothing else.
 - One shared legend row under the plot in black/white/grey explains the shades and hatching for every tool; each tool keeps its own colour.
-- Error bars: fig4 shows the 95 % bootstrap CI over targets; fig5b/fig5c completeness shows ±1 SD across unique models (or targets). Repeats are averaged per input first: tool outputs are deterministic per input, so counting every repeat would inflate *n* without adding spread. Breadth is one union count per tool and has no error bar.
+- Error bars: fig4a shows the 95 % bootstrap CI over targets (fig4b has value labels instead: a scope has only 4 targets); fig5b/fig5c completeness shows ±1 SD across unique models (or targets). Repeats are averaged per input first: tool outputs are deterministic per input, so counting every repeat would inflate *n* without adding spread. Breadth is one union count per tool and has no error bar.
 
 ---
 
@@ -164,11 +175,14 @@ uv run pytest tests
   - `models`: counted. A detection is a TP, a miss is a FN. Each entry has an `id`, optional `aliases` (the literal as written in the source), a pattern `scope` and the source `file`.
   - `neutral`: real references that are indirect or output-only (a push-target repo, a ternary over variables, a legacy single-segment `_name_or_path`). Detecting or missing one costs nothing.
   - `not_models`: literals in the source that are not models (datasets, metric modules, prose). Reporting one is a false positive.
-- **Detections** come from the tool output only: CycloneDX components of `type: machine-learning-model` (never `data`, `framework` or `library` components), akumar's native `models[].model`, jorisbot's model list.
+- **Detections** come from the tool output only: every CycloneDX component of `type: machine-learning-model` (never `data`, `framework` or `library` components), akumar's native `models[]`, jorisbot's model list — whatever the provider. The model ID of a CycloneDX component is, in order: trusera's `trusera:model_name` property; an HF-style `name`; a local model path; `group/name` (cdxgen: `openai` / `gpt-4o`); or the `name` when the purl is a model purl (`pkg:huggingface/`, `pkg:generic/`; HTS AiBOM's `GPT-4o`). A package purl (`pkg:pypi/`, `pkg:npm/`) means the component names a library.
+- **Unidentified claims** — a model entry that names no model (trusera's `HuggingFace (import: transformers)` / `OpenAI API call: …`, akumar's `model: "unknown"`, jorisbot's `pytorch`/`pytorch`) — are reported as their own count (`unidentified_claims`) and are neither TP nor FP: they show a broader reporting scope (AI usage), not a wrong model ID.
 - **Matching** (`scoring/score_discovery.py`, one function used at run time and at aggregation): case-insensitive and org-aware. A detection matches an entry by its `id` or an alias. A name-only match is allowed only when the ground-truth ID itself has no org (`gpt-4o`); `Xenova/bert-base-uncased` never matches `google-bert/bert-base-uncased`. Each entry is consumed once. Everything else is a false positive, including base models and datasets the source never references.
 - **A scan that finds nothing is a valid result** (`success_empty`, zero detections), not a failure, and so are crashes and timeouts for T3: every target counts for every tool, so no tool's average silently drops targets. `aibomgen-cli scan` writes no file when it finds nothing.
 - **Headline metrics are micro** (TP/FP/FN pooled over targets) with a 95 % bootstrap CI that resamples targets. Macro F1 (mean ± SD of per-target F1) is reported alongside, plus recall per pattern class (`recall_by_pattern`).
 - The aggregator re-scores T3 from the stored `detected_ids` and the current ground truth, so fixing a ground-truth file never needs a tool re-run (`eval rescore` refreshes the detections themselves).
+- Targets contain realistic **distractors**: strings that look like model IDs but aren't models (`load_dataset` IDs, container images, GitHub repos, a W&B project, an output path), listed under `not_models`. Reporting one is a false positive, which keeps precision informative. Targets contain no comments describing any scanner's rules.
+- **Documented support**: `benchmarks/tool-claims.yaml` records, per tool and scope, what the tool's own docs claim (`yes` / `partial` / `no`, with file:line evidence) and what its code actually scans. fig4b draws it as a marker under each bar (● claims support, ◐ partial, ○ no claim), so a low recall outside a tool's stated scope reads differently from a miss inside it.
 - Targets contain the scanned files only; `scripts/validate_ground_truth.py` checks that every ground-truth literal occurs in its file and that every HF-style `org/name` literal in a target is accounted for.
 
 ### T4 — CycloneDX quality
@@ -275,7 +289,9 @@ aibomgen-cli-eval/
 │   ├── run_lab700xorg_aisbom.py
 │   ├── run_akumar_aibom.py
 │   ├── run_jorisbot_aibom.py
-│   └── run_trusera_aibom.py
+│   ├── run_trusera_aibom.py
+│   ├── run_cdxgen_aibom.py
+│   └── run_hts_aibom.py
 ├── scoring/
 │   ├── extract.py                        output parsers → detected model IDs (models only)
 │   ├── ground_truth.py                   ground-truth (schema v2) loader
@@ -291,6 +307,7 @@ aibomgen-cli-eval/
 │   └── graphs.py                         publication-ready PDF + PNG figure generator
 ├── benchmarks/
 │   ├── datasets/model-ids/popular.json   500 popular HF models
+│   ├── tool-claims.yaml                  documented support per tool and T3 scope (fig4b markers)
 │   └── ground-truth/T3-source-scan/      one target-*.json per target (16), schema v2
 ├── targets/                              16 synthetic scan targets (target-01-python … target-16-cloud-api)
 ├── scripts/
@@ -302,6 +319,8 @@ aibomgen-cli-eval/
 │   ├── aibom-generator/                  git submodule (OWASP)
 │   ├── akumar-aibom/                     git submodule
 │   ├── cisco-aibom/                      git submodule
+│   ├── cdxgen/                           npm project pinning @cyclonedx/cdxgen
+│   ├── hts-aibom/                        git submodule
 │   ├── jorisbot-aibom/                   git submodule
 │   ├── lab700xorg-aisbom/                git submodule
 │   └── trusera-aibom/                    git submodule

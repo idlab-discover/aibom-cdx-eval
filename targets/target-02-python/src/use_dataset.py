@@ -13,3 +13,7 @@ def load_datasets():
 
 if __name__ == "__main__":
     load_datasets()
+
+
+def load_reviews():
+    return load_dataset("stanfordnlp/imdb", split="test")

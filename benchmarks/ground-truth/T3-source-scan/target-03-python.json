@@ -22,5 +22,11 @@
     }
   ],
   "neutral": [],
-  "not_models": []
+  "not_models": [
+    {
+      "id": "acme-ml/support-tickets",
+      "kind": "dataset (load_dataset)",
+      "file": "classifier.py"
+    }
+  ]
 }

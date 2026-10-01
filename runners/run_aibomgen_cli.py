@@ -18,7 +18,7 @@ from typing import Any
 
 from constants import EVAL_ROOT, TASK_T3_T4
 from runners.base_runner import BaseRunner, git_commit
-from scoring.extract import extract_model_ids_cyclonedx_many
+from scoring.extract import extract_model_ids_cyclonedx_many, model_claims_cyclonedx_many
 from scoring.score_cdx import score_cdx_paths
 
 
@@ -80,6 +80,10 @@ class AibomgenCliRunner(BaseRunner):
     def locate_output(self, output_dir: Path) -> Path | None:
         matches = sorted(output_dir.glob("*.json"))
         return matches[0] if matches else None
+
+    @classmethod
+    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
+        return model_claims_cyclonedx_many(cls.cdx_output_paths(tool_output_dir))[1]
 
     @classmethod
     def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
