@@ -13,6 +13,8 @@ def test_gated_models_classified_identically_for_every_tool():
     # ALOHA prints 403 to stdout, lab700xorg prints 401 to stderr: both are "gated"
     assert classify_error(1, GATED_403, None, False) == "gated_or_unauthorized"
     assert classify_error(1, GATED_401, None, False) == "gated_or_unauthorized"
+    lab700_v16 = "✖ Authentication failed for model.safetensors despite a token being set."
+    assert classify_error(1, lab700_v16, None, False) == "gated_or_unauthorized"
 
 
 def test_gated_is_checked_before_generic_network_patterns():

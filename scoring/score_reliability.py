@@ -43,6 +43,7 @@ _GATED_PATTERNS = re.compile(
     r"(\b40[13]\b[^\n]{0,60}(unauthorized|forbidden|client error)|"
     r"(unauthorized|forbidden)[^\n]{0,60}\b40[13]\b|"
     r"gated (repo|model)|"
+    r"authentication failed|"                     # lab700xorg-aisbom >= 1.6
     r"access to model [^\n]{0,120} is restricted)",
     re.IGNORECASE,
 )
