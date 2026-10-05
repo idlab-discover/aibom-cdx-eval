@@ -103,3 +103,52 @@ def test_cdxgen_model_id_bom_without_model_is_no_output(tmp_path):
     assert t3.locate_output(tmp_path) == bom          # T3: an empty scan is a valid result
     bom.write_text('{"components": [{"type": "machine-learning-model", "name": "bert"}]}')
     assert t1.locate_output(tmp_path) == bom
+
+
+def test_is_gated_only_for_auth_failures():
+    from scoring.score_reliability import is_gated
+    assert is_gated(GATED_403) and is_gated(GATED_401)
+    assert is_gated("✖ Authentication failed for model.safetensors despite a token being set.")
+    assert not is_gated("HTTPError: 429 Client Error: Too Many Requests")
+    assert not is_gated("ConnectionError: connection reset by peer")
+
+
+def _fake_runner(tmp_path, script, run_type="model-id"):
+    from runners.base_runner import BaseRunner
+
+    class Fake(BaseRunner):
+        def build_command(self, input_spec, output_dir, run_env):
+            return ["sh", "-c", script]
+
+        def get_version(self):
+            return "0", "0"
+
+    return Fake({"id": "fake", "path": str(tmp_path), "max_retries": 2,
+                 "retry_delay_seconds": 0}, run_type)
+
+
+def test_gated_failures_are_not_retried(tmp_path, monkeypatch):
+    monkeypatch.setattr("runners.base_runner.hub_budget", lambda token: None)
+    Fake = lambda script: _fake_runner(tmp_path, script)  # noqa: E731
+    gated = Fake('echo "403 Client Error: Forbidden for url"; exit 1').run("r", "org/m", "d", tmp_path)
+    assert not gated.success and gated.retries == 0
+    flaky = Fake("echo boom; exit 1").run("r", "org/m", "d", tmp_path, repeat_index=2)
+    assert not flaky.success and flaky.retries == 2
+
+
+def test_parse_ratelimit_header():
+    from runners.base_runner import parse_ratelimit
+    assert parse_ratelimit('"api";r=12;t=40') == (12, 40)
+    assert parse_ratelimit("garbage") is None and parse_ratelimit(None) is None
+
+
+def test_waits_for_hub_window_only_when_budget_low(tmp_path, monkeypatch):
+    import runners.base_runner as br
+    budgets = iter([(5, 0), (999, 300)])
+    probes, sleeps = [], []
+    monkeypatch.setattr(br, "hub_budget", lambda token: probes.append(token) or next(budgets))
+    monkeypatch.setattr(br.time, "sleep", sleeps.append)
+    assert _fake_runner(tmp_path, "exit 0").run("r", "org/m", "d", tmp_path).retries == 0
+    assert sleeps[0] == 2 and len(probes) == 2      # low → wait t+2, then enough budget
+    _fake_runner(tmp_path, "exit 0", "source-scan").run("r", str(tmp_path), "d", tmp_path)
+    assert len(probes) == 2                         # source scans never probe the Hub

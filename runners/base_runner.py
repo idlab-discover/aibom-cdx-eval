@@ -16,6 +16,8 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from constants import (
     K_ERROR_CLASS,
     K_UNIDENTIFIED,
     METRICS_FILENAME,
+    RUN_MODEL_ID,
     RUN_SOURCE_SCAN,
 )
 
@@ -35,7 +38,7 @@ from scoring.ground_truth import ground_truth_path
 from scoring.score_cdx import score_cdx_paths
 from scoring.score_discovery import score_discovery
 from scoring.score_performance import score_performance
-from scoring.score_reliability import classify_error
+from scoring.score_reliability import classify_error, is_gated
 
 
 @dataclasses.dataclass
@@ -87,6 +90,7 @@ class BaseRunner(abc.ABC):
     MAX_RETRIES: int = 3
     RETRY_DELAY: int = 30   # seconds
     TIMEOUT: int = 1800     # seconds (30 min)
+    HUB_ANONYMOUS: bool = False   # True if the tool sends no token (probe the per-IP budget)
 
     def __init__(self, tool_config: dict, run_type: str) -> None:
         self.tool_config = tool_config
@@ -145,6 +149,25 @@ class BaseRunner(abc.ABC):
 
     def post_run(self) -> None:
         """Called once after the last job of a run (e.g. to undo local patches)."""
+
+    def _wait_for_hub_budget(self, run_env: dict) -> bool:
+        """Model-id jobs only: if the Hub API budget is below hub_min_remaining,
+        sleep until its window resets.  Returns True if it waited."""
+        if self.run_type != RUN_MODEL_ID:
+            return False
+        token = None if self.HUB_ANONYMOUS else run_env.get("HF_TOKEN")
+        reserve = int(self.tool_config.get("hub_min_remaining", 200))
+        waited = False
+        for _ in range(3):   # bounded: a probe that keeps reporting low budget can't stall the run
+            budget = hub_budget(token)
+            if budget is None or budget[0] >= reserve:
+                break
+            remaining, reset = budget
+            print(f"  ⏸  Hub budget r={remaining} (< {reserve}); waiting {reset + 2}s for window reset",
+                  flush=True)
+            time.sleep(reset + 2)
+            waited = True
+        return waited
 
     def get_version(self) -> tuple[str, str]:
         """Return (version_string, commit). Default: the tool checkout's package
@@ -280,6 +303,7 @@ class BaseRunner(abc.ABC):
         else:
             actual_cmd = cmd
 
+        self._wait_for_hub_budget(run_env)    # before ts_start: never part of the timing
         ts_start = datetime.datetime.now(datetime.timezone.utc)
         exit_code = -1
         error_msg: str | None = None
@@ -292,11 +316,13 @@ class BaseRunner(abc.ABC):
                 retries += 1
                 print(
                     f"  ↻  Retry {attempt}/{max_retries} — "
-                    f"{self._tool_id} | {input_spec} "
-                    f"(exit {exit_code}, waiting {retry_delay:g}s…)",
+                    f"{self._tool_id} | {input_spec} (exit {exit_code})",
                     flush=True,
                 )
-                time.sleep(retry_delay)
+                # Hub budget used up (a 429): wait for the window reset.  Otherwise
+                # exponential backoff (30, 60, 120 s, ...) to ride out short Hub outages.
+                if not self._wait_for_hub_budget(run_env):
+                    time.sleep(retry_delay * 2 ** (attempt - 1))
 
             t0 = time.monotonic()
             try:
@@ -320,6 +346,9 @@ class BaseRunner(abc.ABC):
                     break
 
                 error_msg = _build_error_message(stderr_log, stdout_log)
+                # A gated/unauthorized model fails the same way every time: don't retry.
+                if is_gated(_read_tail(stderr_log, 2000) + "\n" + _read_tail(stdout_log, 2000)):
+                    break
 
             except subprocess.TimeoutExpired:
                 attempt_duration = time.monotonic() - t0
@@ -435,6 +464,33 @@ def git_commit(path: Path) -> str:
         return head + ("-dirty" if dirty else "")
     except Exception:
         return "unknown"
+
+
+_HUB_PROBE_URL = "https://huggingface.co/api/models/google-bert/bert-base-uncased"
+_RATELIMIT_RE = re.compile(r"\br=(\d+);t=(\d+)")
+
+
+def parse_ratelimit(header: str | None) -> tuple[int, int] | None:
+    """'"api";r=999;t=264' → (remaining, seconds until the window resets)."""
+    m = _RATELIMIT_RE.search(header or "")
+    return (int(m[1]), int(m[2])) if m else None
+
+
+def hub_budget(token: str | None) -> tuple[int, int] | None:
+    """Remaining Hub `api` budget (1000/5 min with a token, 500 per IP without) from the
+    `ratelimit` response header; None if the probe fails.  Costs one request.
+    ponytail: probes only the `api` bucket, not `resolvers` (5000/5 min); add it if
+    429s on /resolve/ ever show up."""
+    req = urllib.request.Request(_HUB_PROBE_URL, method="HEAD")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return parse_ratelimit(resp.headers.get("ratelimit"))
+    except urllib.error.HTTPError as exc:     # a 429 still carries the header
+        return parse_ratelimit(exc.headers.get("ratelimit"))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _parse_gnu_time_memory(time_file: Path) -> float | None:

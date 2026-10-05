@@ -63,6 +63,11 @@ _NETWORK_PATTERNS = re.compile(
 )
 
 
+def is_gated(log: str) -> bool:
+    """True if the log shows a 401/403 / gated-repo failure (deterministic: never retried)."""
+    return bool(log and _GATED_PATTERNS.search(log))
+
+
 def classify_error(
     exit_code: int,
     stderr: str,
@@ -96,7 +101,7 @@ def classify_error(
     log = stderr or ""
 
     # gated_or_unauthorized: checked before the generic network patterns
-    if log and _GATED_PATTERNS.search(log):
+    if is_gated(log):
         return EC_GATED_OR_UNAUTHORIZED
 
     # network_error: heuristic on the logs

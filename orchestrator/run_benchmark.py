@@ -100,7 +100,7 @@ _RESULTS_DIR_OPTION = click.option(
     "--cooldown",
     default=None,
     type=float,
-    help="Minutes to wait between job groups (default: 5.0).",
+    help="Extra fixed wait between job groups in minutes (default: 0; the Hub budget is already checked before every job).",
 )
 @click.option(
     "--repeats",
@@ -364,7 +364,7 @@ def _run_once(
     )
 
     done = failed = 0
-    inter_group_wait = int((cooldown if cooldown is not None else 5.0) * 60)
+    inter_group_wait = int((cooldown if cooldown is not None else 0.0) * 60)
 
     groups = [
         (group, list(grp_jobs))
@@ -407,7 +407,8 @@ def _load_config() -> dict:
 
 
 # Keys of config.yaml `run:` that every runner receives (a tool block may override them).
-_RUN_DEFAULTS_FOR_RUNNERS = ("max_retries", "retry_delay_seconds", "timeout_seconds", "retry_on_timeout")
+_RUN_DEFAULTS_FOR_RUNNERS = ("max_retries", "retry_delay_seconds", "timeout_seconds", "retry_on_timeout",
+                             "hub_min_remaining")
 
 
 def _build_jobs(
