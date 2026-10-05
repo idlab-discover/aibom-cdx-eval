@@ -1,13 +1,16 @@
 """
 aggregate.py — cross-tool, cross-task result aggregation.
 
-Reads all metrics.json files from a completed run and produces:
-    results/aggregated/data/<run-id>/<run-id>_summary.json      per-tool per-sub-task stats
-    results/aggregated/data/<run-id>/<run-id>_t3_*.{json,csv}   T3 tables (paper/report reuse)
+Reads all metrics.json files of <root>/runs/<run-id>/ and writes to
+<root>/aggregated/data/<run-id>/ (root = --results-dir, default results/):
+    <run-id>_summary.json            per-tool per-task stats
+    <run-id>_t3_*.{json,csv}         T3 tables (paper/report reuse)
+    <run-id>_{t1,t2,t4}_*.csv        T1 / T2 / T4 tables
+    <run-id>_report.md               every headline table in one file
 
-Sub-tasks derived from the raw task IDs:
-  T1_T2 → T1 (performance), T2 (reliability), T4-MODELID (CycloneDX quality)
-  T3_T4 → T3 (discovery),   T4-SCAN (CycloneDX quality)
+Tasks scored from the run types:
+  model-id    → T1 (performance), T2 (reliability), T4-model-id (CycloneDX quality)
+  source-scan → T3 (discovery),   T4-source-scan (CycloneDX quality)
 
 Design notes
   * T3 is RE-SCORED here from the stored ``detected_ids`` and the current ground
@@ -29,7 +32,6 @@ from __future__ import annotations
 import csv
 import json
 import statistics
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -39,7 +41,6 @@ import numpy as np
 import yaml
 
 from constants import (
-    AGGREGATED_DIR,
     CONFIG_PATH,
     EC_CRASH,
     EC_SUCCESS,
@@ -66,57 +67,45 @@ from constants import (
     K_SIZE_NORM_THROUGHPUT,
     K_SUCCESS_RATE,
     K_UNIDENTIFIED,
-    LEGACY_ERROR_CLASSES,
-    LEGACY_TASK_IDS,
-    RESULTS_DIR,
-    SUBTASK_T1,
-    SUBTASK_T2,
-    SUBTASK_T3,
-    SUBTASK_T4_MODELID,
-    SUBTASK_T4_SCAN,
-    TASK_T1_T2,
-    TASK_T3_T4,
+    TASK_T1,
+    TASK_T2,
+    TASK_T3,
+    TASK_T4_MODEL_ID,
+    TASK_T4_SOURCE_SCAN,
+    RUN_MODEL_ID,
+    RUN_SOURCE_SCAN,
+    RUN_TYPE_LABELS,
+    T4_RUN_TYPE,
     TOOL_LABELS,
     TOOL_ORDER,
 )
 from scoring.ground_truth import ground_truth_path, load_ground_truth
-from scoring.score_cdx_completeness import merge_completeness_detail
 from scoring.score_discovery import match_detections, prf
-from scoring.utils import pass_rate
 
 _BOOTSTRAP_B = 2000
 _BOOTSTRAP_SEED = 42
 _SCOPE_BUCKETS = ("python", "mixed", "config", "cloud_api")
 
 
-@click.command()
-@click.option("--run-id", required=True, help="Run ID to aggregate.")
-@click.option(
-    "--results-dir",
-    default=str(RESULTS_DIR),
-    show_default=True,
-    help="Base results directory.",
-)
-def main(run_id: str, results_dir: str) -> None:
-    run_dir = Path(results_dir) / run_id
-    if not run_dir.exists():
-        click.echo(f"Run directory not found: {run_dir}", err=True)
-        sys.exit(1)
-
+def aggregate_run(run_id: str, results_root: Path) -> Path:
+    """Aggregate <root>/runs/<run-id>; returns the path of the summary JSON."""
+    run_dir = results_root / "runs" / run_id
     records = _load_all_metrics(run_dir)
     click.echo(f"Loaded {len(records)} result records from run {run_id}")
 
     summary = _build_summary(records, baselines=_load_baselines(run_dir))
 
-    data_dir = _run_data_dir(run_id)
+    data_dir = results_root / "aggregated" / "data" / run_id
+    data_dir.mkdir(parents=True, exist_ok=True)
     summary_path = data_dir / f"{run_id}_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
     click.echo(f"Summary → {summary_path}")
-    _write_t3_tables(run_id, summary)
-    _write_other_tables(run_id, summary)
-    _write_report(run_id, summary)
+    _write_t3_tables(data_dir, run_id, summary)
+    _write_other_tables(data_dir, run_id, summary)
+    _write_report(data_dir, run_id, summary)
+    return summary_path
 
 
 # ------------------------------------------------------------------ #
@@ -131,13 +120,7 @@ def _load_all_metrics(run_dir: Path) -> list[dict[str, Any]]:
                 rec = json.load(f)
         except Exception:
             continue
-        # Runs made before the renames are read under the current names.
-        rec["task"] = LEGACY_TASK_IDS.get(rec.get("task", ""), rec.get("task", ""))
-        scores = rec.get("scores") or {}
-        ec = scores.get(K_ERROR_CLASS)
-        if ec in LEGACY_ERROR_CLASSES:
-            scores[K_ERROR_CLASS] = LEGACY_ERROR_CLASSES[ec]
-        rec["scores"] = scores
+        rec["scores"] = rec.get("scores") or {}
         records.append(rec)
     return records
 
@@ -147,15 +130,8 @@ def _load_baselines(run_dir: Path) -> dict[str, float]:
     meta = run_dir / "run_meta.json"
     if not meta.exists():
         return {}
-    try:
-        data = json.loads(meta.read_text())
-    except Exception:
-        return {}
-    return {
-        tool: float(b["median_seconds"])
-        for tool, b in (data.get("baselines") or {}).items()
-        if isinstance(b, dict) and isinstance(b.get("median_seconds"), (int, float))
-    }
+    baselines = json.loads(meta.read_text())["baselines"]
+    return {tool: b["median_seconds"] for tool, b in baselines.items() if b["median_seconds"] is not None}
 
 
 # ------------------------------------------------------------------ #
@@ -165,21 +141,21 @@ def _load_baselines(run_dir: Path) -> dict[str, float]:
 def _build_summary(records: list[dict], baselines: dict[str, float] | None = None) -> dict[str, Any]:
     """
     Five sub-sections:
-      T1          — performance metrics from T1_T2 records
-      T2          — reliability metrics from T1_T2 records
-      T3          — discovery metrics from T3_T4 records
-      T4-MODELID  — CDX quality of the BOMs built from HF model IDs
-      T4-SCAN     — CDX quality of the BOMs built from source scans
+      T1             — performance metrics from model-ID records
+      T2             — reliability metrics from model-ID records
+      T3             — discovery metrics from source-scan records
+      T4-model-id    — CDX quality of the BOMs built from model IDs
+      T4-source-scan — CDX quality of the BOMs built from source scans
     """
-    t1t2 = [r for r in records if r.get("task") == TASK_T1_T2]
-    t3t4 = [r for r in records if r.get("task") == TASK_T3_T4]
+    model_id = [r for r in records if r.get("run_type") == RUN_MODEL_ID]
+    scans = [r for r in records if r.get("run_type") == RUN_SOURCE_SCAN]
 
     summary: dict[str, Any] = {}
-    _aggregate_t1(summary, t1t2, baselines or {})
-    _aggregate_reliability(summary, SUBTASK_T2, t1t2)
-    _aggregate_discovery(summary, SUBTASK_T3, t3t4)
-    _aggregate_cdx(summary, SUBTASK_T4_MODELID, t1t2)
-    _aggregate_cdx(summary, SUBTASK_T4_SCAN, t3t4)
+    _aggregate_t1(summary, model_id, baselines or {})
+    _aggregate_reliability(summary, TASK_T2, model_id)
+    _aggregate_discovery(summary, TASK_T3, scans)
+    _aggregate_cdx(summary, TASK_T4_MODEL_ID, model_id)
+    _aggregate_cdx(summary, TASK_T4_SOURCE_SCAN, scans)
     return summary
 
 
@@ -277,9 +253,9 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
             if isinstance(thr, (int, float)):
                 per_model_thr[spec].append(float(thr))
 
-        summary[f"{tool}::{SUBTASK_T1}"] = {
+        summary[f"{tool}::{TASK_T1}"] = {
             "tool":         tool,
-            "sub_task":     SUBTASK_T1,
+            "task":     TASK_T1,
             "total_runs":   len(recs),
             "successful":   len(successes),
             K_SUCCESS_RATE: round(len(successes) / max(len(recs), 1), 4),
@@ -309,7 +285,7 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
 # T2 — reliability                                                     #
 # ------------------------------------------------------------------ #
 
-def _aggregate_reliability(summary: dict, sub_task: str, records: list[dict]) -> None:
+def _aggregate_reliability(summary: dict, task: str, records: list[dict]) -> None:
     by_tool: dict[str, list[dict]] = defaultdict(list)
     for r in records:
         by_tool[r["tool"]].append(r)
@@ -340,9 +316,9 @@ def _aggregate_reliability(summary: dict, sub_task: str, records: list[dict]) ->
                 flaky += 1
         n_models = len(by_model)
 
-        summary[f"{tool}::{sub_task}"] = {
+        summary[f"{tool}::{task}"] = {
             "tool":            tool,
-            "sub_task":        sub_task,
+            "task":        task,
             "total_runs":      total,
             "successful":      successes,
             K_SUCCESS_RATE:    success_rate,
@@ -370,7 +346,7 @@ def _load_t3_dataset_scope_map() -> dict[str, str]:
             cfg = yaml.safe_load(f) or {}
     except Exception:
         return {}
-    datasets = cfg.get("tasks", {}).get(TASK_T3_T4, {}).get("datasets", [])
+    datasets = cfg.get("run_types", {}).get(RUN_SOURCE_SCAN, {}).get("datasets", [])
     return {
         ds["id"]: ds["scope_bucket"]
         for ds in datasets
@@ -457,7 +433,7 @@ def _discovery_block(targets: list[dict]) -> dict[str, Any]:
     }
 
 
-def _aggregate_discovery(summary: dict, sub_task: str, records: list[dict]) -> None:
+def _aggregate_discovery(summary: dict, task: str, records: list[dict]) -> None:
     """T3: one scored entry per (tool, target); headline = micro over targets."""
     by_tool: dict[str, list[dict]] = defaultdict(list)
     for r in records:
@@ -475,18 +451,11 @@ def _aggregate_discovery(summary: dict, sub_task: str, records: list[dict]) -> N
 
         metrics: dict[str, Any] = dict(_discovery_block(targets))
 
-        for scope in _SCOPE_BUCKETS:
-            scoped = [t for t in targets if scope_map.get(t["dataset"]) == scope]
-            if not scoped:
-                continue
-            block = _discovery_block(scoped)
-            for key in ("precision", "recall", "f1"):
-                metrics[f"{key}_scope_{scope}"] = block[key]
-            for key in ("tp", "fp", "fn"):
-                metrics[f"{key}_scope_{scope}_total"] = block[f"{key}_total"]
-            metrics[f"fp_per_target_scope_{scope}_mean"] = block["fp_per_target_mean"]
-            metrics[f"zero_detect_scope_{scope}_rate"] = block["zero_detect_rate"]
-            metrics[f"n_scope_{scope}"] = block["n_targets"]
+        metrics["by_scope"] = {
+            scope: _discovery_block(scoped)
+            for scope in _SCOPE_BUCKETS
+            if (scoped := [t for t in targets if scope_map.get(t["dataset"]) == scope])
+        }
 
         # Recall by pattern class (ground-truth `scope`: python_literal, yaml_literal, ...)
         tp_by: Counter[str] = Counter()
@@ -507,9 +476,9 @@ def _aggregate_discovery(summary: dict, sub_task: str, records: list[dict]) -> N
         }
 
         n_ok = sum(1 for r in latest.values() if r.get("success"))
-        summary[f"{tool}::{sub_task}"] = {
+        summary[f"{tool}::{task}"] = {
             "tool":         tool,
-            "sub_task":     sub_task,
+            "task":     task,
             "total_runs":   len(recs),
             "successful":   n_ok,
             K_SUCCESS_RATE: round(n_ok / max(len(latest), 1), 4),
@@ -521,32 +490,30 @@ def _aggregate_discovery(summary: dict, sub_task: str, records: list[dict]) -> N
 # T3 tables                                                            #
 # ------------------------------------------------------------------ #
 
-def _write_t3_tables(run_id: str, summary: dict[str, Any]) -> None:
+def _write_t3_tables(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
     """Write T3 tables (all scanners, jorisbot included) for the whole set and per scope."""
-    AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
-    tools = [t for t in TOOL_ORDER if f"{t}::{SUBTASK_T3}" in summary]
+    tools = [t for t in TOOL_ORDER if f"{t}::{TASK_T3}" in summary]
 
     for scope in ("full", *_SCOPE_BUCKETS):
         rows = [r for r in (_t3_row(summary, tool, scope) for tool in tools) if r is not None]
         _write_table_files(
-            run_id, f"t3_scope_{scope}", rows,
+            data_dir, run_id, f"t3_scope_{scope}", rows,
             caption=f"T3 model discovery — {'all targets' if scope == 'full' else scope + ' targets'}",
             scope=scope,
         )
 
 
 def _t3_row(summary: dict[str, Any], tool: str, scope: str) -> dict[str, Any] | None:
-    entry = summary.get(f"{tool}::{SUBTASK_T3}")
+    entry = summary.get(f"{tool}::{TASK_T3}")
     if not isinstance(entry, dict):
         return None
-    m = entry.get("metrics", {})
-    sfx = "" if scope == "full" else f"_scope_{scope}"
-    if scope != "full" and m.get(f"f1{sfx}") is None:
+    full = scope == "full"
+    m = entry["metrics"] if full else entry["metrics"]["by_scope"].get(scope)
+    if m is None:
         return None
 
     def g(key: str, field: str = "mean") -> float | None:
-        v = m.get(f"{key}{sfx}")
-        return v.get(field) if isinstance(v, dict) else None
+        return m[key].get(field)
 
     return {
         "tool": tool,
@@ -555,37 +522,26 @@ def _t3_row(summary: dict[str, Any], tool: str, scope: str) -> dict[str, Any] | 
         "f1": g("f1"), "f1_ci_low": g("f1", "ci_low"), "f1_ci_high": g("f1", "ci_high"),
         "precision": g("precision"), "recall": g("recall"),
         "f1_macro_mean": g("f1", "macro_mean"), "f1_macro_std": g("f1", "macro_std"),
-        "tp": m.get(f"tp{sfx}_total" if sfx else "tp_total"),
-        "fp": m.get(f"fp{sfx}_total" if sfx else "fp_total"),
-        "fn": m.get(f"fn{sfx}_total" if sfx else "fn_total"),
-        "n_targets": m.get(f"n_scope_{scope}") if sfx else m.get("n_targets"),
-        "zero_detect_rate": m.get(f"zero_detect_scope_{scope}_rate") if sfx else m.get("zero_detect_rate"),
-        "failed_runs": m.get("failed_runs") if not sfx else None,
-        "unidentified_claims": m.get("unidentified_total") if not sfx else None,
+        "tp": m["tp_total"], "fp": m["fp_total"], "fn": m["fn_total"],
+        "n_targets": m["n_targets"],
+        "zero_detect_rate": m["zero_detect_rate"],
+        "failed_runs": m["failed_runs"] if full else None,
+        "unidentified_claims": m["unidentified_total"] if full else None,
     }
 
 
-def _write_table_files(run_id: str, suffix: str, rows: list[dict[str, Any]], caption: str, scope: str) -> None:
+def _write_table_files(data_dir: Path, run_id: str, suffix: str, rows: list[dict[str, Any]],
+                       caption: str, scope: str) -> None:
     if not rows:
         return
-    data_dir = _run_data_dir(run_id)
     json_path = data_dir / f"{run_id}_{suffix}.json"
     csv_path = data_dir / f"{run_id}_{suffix}.csv"
 
     with open(json_path, "w") as f:
-        json.dump({"run_id": run_id, "sub_task": SUBTASK_T3, "scope": scope,
+        json.dump({"run_id": run_id, "task": TASK_T3, "scope": scope,
                    "caption": caption, "rows": rows}, f, indent=2)
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+    _csv(csv_path, rows)
     click.echo(f"T3 table ({scope}) → {csv_path}")
-
-
-def _run_data_dir(run_id: str) -> Path:
-    data_dir = AGGREGATED_DIR / "data" / run_id
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir
 
 
 # ------------------------------------------------------------------ #
@@ -601,14 +557,14 @@ def _csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _tools_for(summary: dict[str, Any], sub_task: str) -> list[str]:
-    return [t for t in TOOL_ORDER if f"{t}::{sub_task}" in summary]
+def _tools_for(summary: dict[str, Any], task: str) -> list[str]:
+    return [t for t in TOOL_ORDER if f"{t}::{task}" in summary]
 
 
 def _t1_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    for tool in _tools_for(summary, SUBTASK_T1):
-        e = summary[f"{tool}::{SUBTASK_T1}"]
+    for tool in _tools_for(summary, TASK_T1):
+        e = summary[f"{tool}::{TASK_T1}"]
         m = e["metrics"]
         d, net, thr = m.get("duration_stats") or {}, m.get("net_duration_stats") or {}, m.get("throughput_stats") or {}
         rows.append({
@@ -625,8 +581,8 @@ def _t1_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _t2_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    for tool in _tools_for(summary, SUBTASK_T2):
-        e = summary[f"{tool}::{SUBTASK_T2}"]
+    for tool in _tools_for(summary, TASK_T2):
+        e = summary[f"{tool}::{TASK_T2}"]
         rows.append({
             "tool": tool, "label": TOOL_LABELS.get(tool, tool),
             "n_models": e["n_models"], "models_failed": e["n_models_failed"],
@@ -638,14 +594,14 @@ def _t2_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _t4_rows(summary: dict[str, Any], sub_task: str) -> list[dict[str, Any]]:
+def _t4_rows(summary: dict[str, Any], task: str) -> list[dict[str, Any]]:
     def mean(m: dict, key: str, field: str = "mean") -> float | None:
         v = m.get(key)
         return v.get(field) if isinstance(v, dict) else None
 
     rows = []
-    for tool in _tools_for(summary, sub_task):
-        e = summary[f"{tool}::{sub_task}"]
+    for tool in _tools_for(summary, task):
+        e = summary[f"{tool}::{task}"]
         m = e["metrics"]
         rows.append({
             "tool": tool, "label": TOOL_LABELS.get(tool, tool),
@@ -663,14 +619,13 @@ def _t4_rows(summary: dict[str, Any], sub_task: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _write_other_tables(run_id: str, summary: dict[str, Any]) -> None:
+def _write_other_tables(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
     """CSV tables for T1, T2 and both T4 input types (paper/report reuse)."""
-    data_dir = _run_data_dir(run_id)
     tables = {
         "t1_performance": _t1_rows(summary),
         "t2_reliability": _t2_rows(summary),
-        "t4_model_id": _t4_rows(summary, SUBTASK_T4_MODELID),
-        "t4_source_scan": _t4_rows(summary, SUBTASK_T4_SCAN),
+        "t4_model_id": _t4_rows(summary, TASK_T4_MODEL_ID),
+        "t4_source_scan": _t4_rows(summary, TASK_T4_SOURCE_SCAN),
     }
     for name, rows in tables.items():
         _csv(data_dir / f"{run_id}_{name}.csv", rows)
@@ -695,12 +650,12 @@ def _md_table(title: str, rows: list[dict[str, Any]], columns: list[tuple[str, s
     return f"### {title}\n\n" + "\n".join([head, rule, *body]) + "\n\n"
 
 
-def _write_report(run_id: str, summary: dict[str, Any]) -> None:
+def _write_report(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
     """One markdown file with every headline table of the run."""
-    t3 = [r for r in (_t3_row(summary, t, "full") for t in _tools_for(summary, SUBTASK_T3)) if r]
+    t3 = [r for r in (_t3_row(summary, t, "full") for t in _tools_for(summary, TASK_T3)) if r]
     parts = [f"# {run_id}: results\n\nGenerated by `eval aggregate`; every number comes from "
              f"`{run_id}_summary.json`.\n\n"]
-    parts.append(_md_table("T1: performance (HF model-ID input; median over unique models)", _t1_rows(summary), [
+    parts.append(_md_table(f"T1: performance ({RUN_TYPE_LABELS[RUN_MODEL_ID]}; median over unique models)", _t1_rows(summary), [
         ("label", "Tool"), ("n_models", "Models"), ("duration_median_s", "Median s"),
         ("duration_ci_low", "CI low"), ("duration_ci_high", "CI high"),
         ("net_duration_median_s", "Net s"), ("startup_baseline_s", "Start-up s"),
@@ -708,7 +663,7 @@ def _write_report(run_id: str, summary: dict[str, Any]) -> None:
     parts.append(_md_table("T2: reliability (per unique model)", _t2_rows(summary), [
         ("label", "Tool"), ("n_models", "Models"), ("models_failed", "Failed"),
         ("model_success_rate", "Success rate"), ("error_classes_models", "Error classes")]))
-    parts.append(_md_table("T3: model discovery (source-code scan; pooled over targets, 95 % bootstrap CI)", t3, [
+    parts.append(_md_table(f"T3: model discovery ({RUN_TYPE_LABELS[RUN_SOURCE_SCAN]}; pooled over targets, 95 % bootstrap CI)", t3, [
         ("label", "Tool"), ("precision", "Precision"), ("recall", "Recall"), ("f1", "F1"),
         ("f1_ci_low", "F1 CI low"), ("f1_ci_high", "F1 CI high"), ("f1_macro_mean", "Macro F1"),
         ("tp", "TP"), ("fp", "FP"), ("fn", "FN"), ("unidentified_claims", "Unidentified"),
@@ -721,9 +676,9 @@ def _write_report(run_id: str, summary: dict[str, Any]) -> None:
         ("completeness_v16", "Compl. v1.6"), ("completeness_v16_sd", "± SD"),
         ("model_completeness_v16", "Model compl. v1.6"), ("model_completeness_v16_sd", "± SD"),
         ("breadth_v16", "Breadth v1.6")]
-    parts.append(_md_table("T4: CycloneDX quality (HF model-ID input)", _t4_rows(summary, SUBTASK_T4_MODELID), t4_cols))
-    parts.append(_md_table("T4: CycloneDX quality (source-code scan)", _t4_rows(summary, SUBTASK_T4_SCAN), t4_cols))
-    path = _run_data_dir(run_id) / f"{run_id}_report.md"
+    for task, run_type in T4_RUN_TYPE.items():
+        parts.append(_md_table(f"T4: CycloneDX quality ({RUN_TYPE_LABELS[run_type]})", _t4_rows(summary, task), t4_cols))
+    path = data_dir / f"{run_id}_report.md"
     path.write_text("".join(parts))
     click.echo(f"Report → {path}")
 
@@ -762,7 +717,7 @@ def _agg_cdx_breadth(records: list[dict], detail_key: str) -> dict | None:
     """breadth = |union of schema paths filled in ≥1 run| / |total paths|.
 
     Per-run details are already merged (metadata.component.X ≡ components[].X)
-    by the scorer; merging again keeps older metrics.json files comparable.
+    by the scorer.
     """
     union_true: set[str] = set()
     total_paths: int | None = None
@@ -770,10 +725,9 @@ def _agg_cdx_breadth(records: list[dict], detail_key: str) -> dict | None:
     for r in records:
         detail = r.get("scores", {}).get(detail_key)
         if isinstance(detail, dict) and detail:
-            merged = merge_completeness_detail(detail)
             if total_paths is None:
-                total_paths = len(merged)
-            union_true.update(p for p, v in merged.items() if v)
+                total_paths = len(detail)
+            union_true.update(p for p, v in detail.items() if v)
             n_with_detail += 1
     if not total_paths:
         return None
@@ -785,11 +739,18 @@ def _agg_cdx_breadth(records: list[dict], detail_key: str) -> dict | None:
     }
 
 
+def pass_rate(values: list[bool]) -> float | None:
+    """Fraction of True values, or None if empty."""
+    if not values:
+        return None
+    return round(sum(bool(v) for v in values) / len(values), 4)
+
+
 def _has_cdx(record: dict) -> bool:
     return record.get("scores", {}).get(K_CDX_CONFORMANCE_VALID_V16) is not None
 
 
-def _aggregate_cdx(summary: dict, sub_task: str, all_records: list[dict]) -> None:
+def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
     """T4 for every CDX-producing tool.  ``total_runs`` counts ALL runs of the tool;
     runs that emitted no BOM (an empty scan) are reported as ``n_no_bom`` and are
     not scored."""
@@ -808,9 +769,9 @@ def _aggregate_cdx(summary: dict, sub_task: str, all_records: list[dict]) -> Non
         v17_valid = [s[K_CDX_CONFORMANCE_VALID_V17] for s in scores
                      if s.get(K_CDX_CONFORMANCE_VALID_V17) is not None]
 
-        summary[f"{tool}::{sub_task}"] = {
+        summary[f"{tool}::{task}"] = {
             "tool":       tool,
-            "sub_task":   sub_task,
+            "task":   task,
             "total_runs": len(all_recs),
             "n_scored":   len(recs),
             "n_no_bom":   sum(
@@ -829,6 +790,3 @@ def _aggregate_cdx(summary: dict, sub_task: str, all_records: list[dict]) -> Non
             },
         }
 
-
-if __name__ == "__main__":
-    main()

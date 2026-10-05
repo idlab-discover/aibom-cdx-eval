@@ -8,7 +8,7 @@
     "tool",
     "tool_version",
     "tool_commit",
-    "task",
+    "run_type",
     "dataset",
     "input_spec",
     "timestamp_start",
@@ -32,14 +32,13 @@
     "tool_commit": {
       "type": "string"
     },
-    "task": {
+    "run_type": {
       "type": "string",
       "enum": [
-        "T1_T2",
-        "T3_T4",
-        "T3_T4G2"
+        "model-id",
+        "source-scan"
       ],
-      "description": "T1_T2 = runs from an HF model ID (performance, reliability, CycloneDX quality); T3_T4 = runs from a source-code scan (discovery, CycloneDX quality). T3_T4G2 is the name used by eval-001/002."
+      "description": "model-id = run from a Hugging Face model ID (scored as T1, T2, T4-model-id); source-scan = run from a source-code directory (scored as T3, T4-source-scan)."
     },
     "dataset": {
       "type": "string"

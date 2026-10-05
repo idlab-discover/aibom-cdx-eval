@@ -2,9 +2,10 @@
 score_cdx_conformance.py — CycloneDX JSON schema conformance validator (T4).
 
 Validates a tool's JSON output against the official CycloneDX JSON schemas
-for both v1.6 and v1.7.  Both schemas are loaded from the local schemas/
-directory.  Downloads are handled once by prepare_datasets.py or at first
-use here.
+for both v1.6 and v1.7.  The schemas and the ones they reference (SPDX license
+ids, JSF signatures, cryptography definitions) are committed in schemas/ and
+resolved locally, so validation never touches the network.  A schema or
+validator problem raises: it must never be recorded as a non-conformant BOM.
 
 Returns per-version conformance booleans and error lists so that T4
 results can be compared against both spec versions independently.
@@ -12,13 +13,15 @@ results can be compared against both spec versions independently.
 
 from __future__ import annotations
 
+import functools
 import json
-import urllib.request
 from pathlib import Path
 from typing import Any
 
+import jsonschema
+from referencing import Registry, Resource
+
 from constants import (
-    EVAL_ROOT,
     K_CDX_CONFORMANCE_ERRORS_V16,
     K_CDX_CONFORMANCE_ERRORS_V17,
     K_CDX_CONFORMANCE_VALID_V16,
@@ -27,60 +30,28 @@ from constants import (
 )
 
 _SCHEMAS = {
-    "v16": {
-        "path": SCHEMA_DIR / "cyclonedx-1.6.schema.json",
-        "url": "https://cyclonedx.org/schema/bom-1.6.schema.json",
-    },
-    "v17": {
-        "path": SCHEMA_DIR / "cyclonedx-1.7.schema.json",
-        "url": "https://cyclonedx.org/schema/bom-1.7.schema.json",
-    },
+    "v16": SCHEMA_DIR / "cyclonedx-1.6.schema.json",
+    "v17": SCHEMA_DIR / "cyclonedx-1.7.schema.json",
 }
 
-_schema_cache: dict[str, dict | None] = {}
+
+@functools.cache
+def _validator(key: str) -> jsonschema.Draft7Validator:
+    """Validator for one CycloneDX version.  Every schema in schemas/ is registered
+    under its $id, so relative $refs (spdx.schema.json, ...) resolve locally."""
+    registry: Registry = Registry()
+    for path in SCHEMA_DIR.glob("*.schema.json"):
+        contents = json.loads(path.read_text())
+        if "$id" in contents:                  # result.schema.json (ours) has none
+            registry = registry.with_resource(contents["$id"], Resource.from_contents(contents))
+    schema = json.loads(_SCHEMAS[key].read_text())
+    return jsonschema.Draft7Validator(schema, registry=registry)
 
 
-def _load_schema(key: str) -> dict | None:
-    if key in _schema_cache:
-        return _schema_cache[key]
-
-    spec = _SCHEMAS[key]
-    local: Path = spec["path"]
-
-    if local.exists():
-        try:
-            _schema_cache[key] = json.loads(local.read_text())
-            return _schema_cache[key]
-        except Exception:
-            pass
-
-    # Try download
-    try:
-        with urllib.request.urlopen(spec["url"], timeout=30) as resp:
-            data = resp.read()
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_bytes(data)
-        _schema_cache[key] = json.loads(data)
-        return _schema_cache[key]
-    except Exception:
-        _schema_cache[key] = None
-        return None
-
-
-def _validate(instance: Any, schema: dict) -> list[str]:
+def _validate(instance: Any, key: str) -> list[str]:
     """Return a list of human-readable validation error strings."""
-    try:
-        import jsonschema
-        validator = jsonschema.Draft7Validator(schema)
-        errors = sorted(validator.iter_errors(instance), key=lambda e: list(e.path))
-        return [
-            f"[{'.'.join(str(p) for p in e.path) or '/'}] {e.message}"
-            for e in errors
-        ]
-    except ImportError:
-        return ["jsonschema library not available"]
-    except Exception as exc:
-        return [f"Validation error: {exc}"]
+    errors = sorted(_validator(key).iter_errors(instance), key=lambda e: list(e.path))
+    return [f"[{'.'.join(str(p) for p in e.path) or '/'}] {e.message}" for e in errors]
 
 
 def score_cdx_conformance(output_path: Path) -> dict[str, Any]:
@@ -117,13 +88,8 @@ def score_cdx_conformance(output_path: Path) -> dict[str, Any]:
         ("v16", K_CDX_CONFORMANCE_VALID_V16, K_CDX_CONFORMANCE_ERRORS_V16),
         ("v17", K_CDX_CONFORMANCE_VALID_V17, K_CDX_CONFORMANCE_ERRORS_V17),
     ]:
-        schema = _load_schema(key)
-        if schema is None:
-            result[valid_k]  = None
-            result[errors_k] = None
-            continue
-        errors = _validate(instance, schema)
+        errors = _validate(instance, key)
         result[valid_k]  = len(errors) == 0
-        result[errors_k] = errors if errors else []
+        result[errors_k] = errors
 
     return result

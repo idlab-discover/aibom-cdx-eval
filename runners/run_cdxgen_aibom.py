@@ -1,26 +1,32 @@
 """
 Runner for cdxgen in AI-BOM mode (OWASP CycloneDX generator).
 
-Task: T3_T4 — `aibom <source_dir> -o <output_file> --no-install-deps`
-      (the `aibom` command of @cyclonedx/cdxgen sets project type `ai` and the
-      AI-BOM audit defaults; see bin/cdxgen.js and lib/cli/cliOptions.js)
+Run types:
+  model-id    — `aibom pkg:huggingface/<model_id> -o <output_file> --no-install-deps`
+          (cdxgen resolves a Hugging Face purl from Hub metadata; see
+          lib/helpers/huggingfaceUtils.js normalizeHuggingFaceReference).  For a
+          model it cannot resolve it still exits 0 with a BOM that has no
+          components, so a model-id BOM without a model component is no output.
+  source-scan — `aibom <source_dir> -o <output_file> --no-install-deps`
+          (the `aibom` command of @cyclonedx/cdxgen sets project type `ai` and the
+          AI-BOM audit defaults; see bin/cdxgen.js and lib/cli/cliOptions.js)
 Output: CycloneDX 1.7 JSON; models are `machine-learning-model` components with
         `group` = org/provider and `name` = model (e.g. openai / gpt-4o).
 
-cdxgen is installed with npm into tools/cdxgen (version pinned in its
-package.json).  `--no-install-deps` stops it from installing the scanned
-project's dependencies, so every tool sees the same, unmodified target.
+cdxgen runs from its git submodule tools/cdxgen (tag v12.8.5) with the dependencies of
+its own pnpm-lock.yaml; scripts/setup.sh links node_modules/.bin/aibom to bin/cdxgen.js,
+because cdxgen picks its AI-BOM mode from the command name.  `--no-install-deps` stops
+it from installing the scanned project's dependencies, so every tool sees the same,
+unmodified target.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
-from runners.base_runner import BaseRunner
-from scoring.extract import extract_model_ids_cyclonedx_many, model_claims_cyclonedx_many
-from scoring.score_cdx import score_cdx_paths
+from constants import RUN_MODEL_ID
+from runners.base_runner import BaseRunner, git_commit
 
 _OUTPUT = "aibom.cdx.json"
 
@@ -32,6 +38,8 @@ class CdxgenAibomRunner(BaseRunner):
         return str(self.working_dir() / "node_modules" / ".bin" / "aibom")
 
     def build_command(self, input_spec: str, output_dir: Path, run_env: dict) -> list[str]:
+        if self.run_type == RUN_MODEL_ID:
+            input_spec = f"pkg:huggingface/{input_spec}"
         return [self._bin(), input_spec, "-o", str(output_dir / _OUTPUT),
                 "--no-install-deps", "--json-pretty"] + list(self.tool_config.get("tool_flags", []))
 
@@ -39,32 +47,31 @@ class CdxgenAibomRunner(BaseRunner):
         return [self._bin(), "--version"]
 
     def get_version(self) -> tuple[str, str]:
+        # The checkout's package.json (its pyproject.toml belongs to a Python helper)
         try:
-            pkg = self.working_dir() / "node_modules" / "@cyclonedx" / "cdxgen" / "package.json"
-            return json.loads(pkg.read_text())["version"], "npm"
-        except Exception:
-            return "unknown", "unknown"
+            version = json.loads((self.working_dir() / "package.json").read_text())["version"]
+        except (OSError, ValueError, KeyError):
+            version = "unknown"
+        return version, git_commit(self.working_dir())
 
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / _OUTPUT
-        return p if p.exists() else None
-
-    @classmethod
-    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
-        return model_claims_cyclonedx_many(cls.cdx_output_paths(tool_output_dir))[1]
-
-    @classmethod
-    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
-        return extract_model_ids_cyclonedx_many(cls.cdx_output_paths(tool_output_dir))
+        if not p.exists():
+            return None
+        if self.run_type == RUN_MODEL_ID and not has_model_component(p):
+            return None
+        return p
 
     @classmethod
     def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
         p = tool_output_dir / _OUTPUT
         return [p] if p.exists() else []
 
-    def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
-        if output_path is None:
-            return {}
-        scores = self._discovery_scores(self.detections_from_output_dir(self.tool_output_dir))
-        scores.update(score_cdx_paths(self.cdx_output_paths(self.tool_output_dir)))
-        return scores
+
+def has_model_component(path: Path) -> bool:
+    """True if the BOM has a `machine-learning-model` component (unreadable → False)."""
+    try:
+        bom = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return any(c.get("type") == "machine-learning-model" for c in bom.get("components") or [])

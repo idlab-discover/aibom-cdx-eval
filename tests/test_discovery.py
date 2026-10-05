@@ -7,10 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from constants import EVAL_ROOT
-from scoring.extract import extract_model_ids_cyclonedx
 from scoring.ground_truth import GroundTruth, GTEntry
 from scoring.score_discovery import match_detections, prf
 
@@ -88,7 +86,6 @@ def test_cyclonedx_claims_split_identified_and_unidentified(tmp_path: Path):
     ids, unidentified = model_claims_cyclonedx(p)
     assert ids == ["org/meta-model", "gpt-4o", "a/b"]          # data/framework never count
     assert unidentified == ["HuggingFace Transformers"]           # names no model: reported, not scored
-    assert extract_model_ids_cyclonedx(p) == ids
 
 
 def test_cdxgen_style_group_name_and_local_paths(tmp_path: Path):

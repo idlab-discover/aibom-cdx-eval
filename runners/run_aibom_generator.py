@@ -1,16 +1,14 @@
 """
 Runner for the OWASP aibom-generator.
-Task: T1_T2 — `uv run python -m src.cli <model_id> --output <file>`
+Run type: model-id — `uv run python -m src.cli <model_id> --output <file>`
 Output: CycloneDX 1.6 JSON written directly to --output path.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.score_cdx import score_cdx_paths
 
 
 class AibomGeneratorRunner(BaseRunner):
@@ -20,7 +18,7 @@ class AibomGeneratorRunner(BaseRunner):
         self, input_spec: str, output_dir: Path, run_env: dict
     ) -> list[str]:
         output_file = output_dir / "aibom.json"
-        entry = self.tool_config.get("entry", ["uv", "run", "python", "-m", "src.cli"])
+        entry = self.tool_config["entry"]
         return entry + [
             input_spec,
             "--output", str(output_file),
@@ -37,8 +35,3 @@ class AibomGeneratorRunner(BaseRunner):
         # per model like every other tool.
         p = tool_output_dir / "aibom.json"
         return [p] if p.exists() else []
-
-    def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
-        if output_path is None:
-            return {}
-        return score_cdx_paths(self.cdx_output_paths(self.tool_output_dir))

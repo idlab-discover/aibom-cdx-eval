@@ -1,22 +1,20 @@
 """
 Runner for lab700xorg-aisbom.
 
-Task: T1_T2 — HF model-ID based AIBOM generation via zero-download introspection.
+Run type: model-id — HF model-ID based AIBOM generation via zero-download introspection.
 Command: `uv run aisbom scan hf://<model_id> --output <file> --format json --no-fail-on-risk`
 Output: CycloneDX 1.6 JSON.
 
 Note: lab700xorg-aisbom scans binary ML artifacts (.pt, .pkl, .safetensors).
 It operates on HF model metadata via range-request header inspection (no download).
-It is placed in the HF-model-ID group (T1_T2 / T4-MODELID) for fair comparison.
+It runs in the model-id run type only (T1, T2, T4-model-id).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.score_cdx import score_cdx_paths
 
 
 class Lab700xorgAisbomRunner(BaseRunner):
@@ -38,8 +36,3 @@ class Lab700xorgAisbomRunner(BaseRunner):
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / "sbom.json"
         return p if p.exists() else None
-
-    def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
-        if output_path is None:
-            return {}
-        return score_cdx_paths(self.cdx_output_paths(self.tool_output_dir))

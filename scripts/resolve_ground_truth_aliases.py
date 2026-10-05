@@ -28,15 +28,7 @@ EVAL_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(EVAL_ROOT))
 
 from constants import GT_DIR  # noqa: E402
-
-
-def _load_dotenv() -> None:
-    env = EVAL_ROOT / ".env"
-    if env.exists():
-        for line in env.read_text().splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
+from orchestrator.run_benchmark import load_dotenv  # noqa: E402
 
 
 def canonical_id(model_id: str, token: str | None) -> str | None:
@@ -55,7 +47,7 @@ def canonical_id(model_id: str, token: str | None) -> str | None:
 
 def main(argv: list[str]) -> int:
     dry = "--dry-run" in argv
-    _load_dotenv()
+    load_dotenv()
     token = os.environ.get("HF_TOKEN")
     added = 0
     for path in sorted(GT_DIR.glob("*.json")):

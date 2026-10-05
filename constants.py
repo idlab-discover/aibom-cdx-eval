@@ -9,7 +9,6 @@ in individual modules.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 # ── Repository root ────────────────────────────────────────────────────────
 
@@ -17,9 +16,8 @@ EVAL_ROOT = Path(__file__).parent
 
 # ── Directory paths ────────────────────────────────────────────────────────
 
-RESULTS_DIR    = EVAL_ROOT / "results" / "runs"
-AGGREGATED_DIR = EVAL_ROOT / "results" / "aggregated"
-FIGURES_DIR    = AGGREGATED_DIR / "figures"
+# Results root (`--results-dir`): <root>/runs/<run>/ and <root>/aggregated/{data,figures}/<run>/
+RESULTS_ROOT   = EVAL_ROOT / "results"
 GT_DIR         = EVAL_ROOT / "benchmarks" / "ground-truth" / "T3-source-scan"
 SCHEMA_DIR     = EVAL_ROOT / "schemas"
 CONFIG_PATH    = EVAL_ROOT / "orchestrator" / "config.yaml"
@@ -27,54 +25,34 @@ CONFIG_PATH    = EVAL_ROOT / "orchestrator" / "config.yaml"
 # ── File names ─────────────────────────────────────────────────────────────
 
 METRICS_FILENAME     = "metrics.json"
-CHECKPOINT_FILENAME  = "checkpoint.json"
 JOB_INDEX_FILENAME   = "job_index.json"
-CHECKPOINT_DELIMITER = "|"
 
-# ── Task IDs (raw, as stored in metrics.json) ──────────────────────────────
+# ── Run types (what a tool is given; stored as `run_type` in metrics.json) ──
 
-TASK_T1_T2 = "T1_T2"   # runs whose input is a HuggingFace model ID
-TASK_T3_T4 = "T3_T4"   # runs whose input is a source-code directory (scan)
+RUN_MODEL_ID    = "model-id"      # input: a Hugging Face model ID
+RUN_SOURCE_SCAN = "source-scan"   # input: a source-code directory
 
-# Task IDs written by earlier runs (eval-001/002), mapped to the current ones.
-LEGACY_TASK_IDS: dict[str, str] = {"T3_T4G2": TASK_T3_T4}
-
-# ── Sub-task IDs (derived at aggregation time) ─────────────────────────────
-
-SUBTASK_T1        = "T1"
-SUBTASK_T2        = "T2"
-SUBTASK_T3        = "T3"
-SUBTASK_T4_MODELID = "T4-MODELID"   # CycloneDX quality of BOMs built from HF model IDs
-SUBTASK_T4_SCAN    = "T4-SCAN"      # CycloneDX quality of BOMs built from source scans
-
-SUB_TASK_DESCRIPTIONS: dict[str, str] = {
-    SUBTASK_T1:         "HF model ID to AIBOM: performance",
-    SUBTASK_T2:         "HF model ID to AIBOM: reliability",
-    SUBTASK_T3:         "Source-code scan: model discovery",
-    SUBTASK_T4_MODELID: "CycloneDX quality (HF model-ID input)",
-    SUBTASK_T4_SCAN:    "CycloneDX quality (source-code scan)",
+# Human-readable run-type names (figure subtitles, report headings).
+RUN_TYPE_LABELS: dict[str, str] = {
+    RUN_MODEL_ID:    "Model ID",
+    RUN_SOURCE_SCAN: "Source scan",
 }
 
-# Human-readable input-type labels (figure subtitles, tables).
-INPUT_LABEL_MODEL_ID = "HF model-ID input"
-INPUT_LABEL_SCAN     = "Source-code scan"
-INPUT_TYPE_LABELS: dict[str, str] = {
-    SUBTASK_T4_MODELID: INPUT_LABEL_MODEL_ID,
-    SUBTASK_T4_SCAN:    INPUT_LABEL_SCAN,
+# ── Tasks (scored at aggregation time from the run types) ──────────────────
+
+TASK_T1             = "T1"               # model ID: performance
+TASK_T2             = "T2"               # model ID: reliability
+TASK_T3             = "T3"               # source scan: model discovery
+TASK_T4_MODEL_ID    = "T4-model-id"      # CycloneDX quality of model-ID BOMs
+TASK_T4_SOURCE_SCAN = "T4-source-scan"   # CycloneDX quality of source-scan BOMs
+
+# Run type each T4 variant is scored from.
+T4_RUN_TYPE: dict[str, str] = {
+    TASK_T4_MODEL_ID:    RUN_MODEL_ID,
+    TASK_T4_SOURCE_SCAN: RUN_SOURCE_SCAN,
 }
 
 # ── Error class values ─────────────────────────────────────────────────────
-
-ErrorClass = Literal[
-    "success",
-    "success_empty",
-    "timeout",
-    "network_error",
-    "gated_or_unauthorized",
-    "parse_error",
-    "crash",
-    "missing_output",
-]
 
 EC_SUCCESS               = "success"
 EC_SUCCESS_EMPTY         = "success_empty"   # scan tool ran fine and found nothing
@@ -84,9 +62,6 @@ EC_GATED_OR_UNAUTHORIZED = "gated_or_unauthorized"
 EC_PARSE_ERROR           = "parse_error"
 EC_CRASH                 = "crash"
 EC_MISSING_OUTPUT        = "missing_output"
-
-# Error-class names used by earlier runs, mapped to the current ones.
-LEGACY_ERROR_CLASSES: dict[str, str] = {"unauthorized_download": EC_GATED_OR_UNAUTHORIZED}
 
 # ── Metric key names ───────────────────────────────────────────────────────
 
@@ -100,9 +75,6 @@ K_FAILURE_RATE                = "failure_rate"
 K_RETRIES_MEAN                = "retries_mean"
 K_DETECTED_IDS                = "detected_ids"
 K_UNIDENTIFIED                = "unidentified_claims"   # model claims naming no model
-K_F1                          = "f1"
-K_PRECISION                   = "precision"
-K_RECALL                      = "recall"
 K_CDX_COMPLETENESS_V16        = "cdx_completeness_pct_v16"
 K_CDX_COMPLETENESS_V17        = "cdx_completeness_pct_v17"
 K_CDX_COMPLETENESS_DETAIL_V16 = "cdx_completeness_detail_v16"

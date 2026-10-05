@@ -4,13 +4,15 @@ run_benchmark.py — main orchestration CLI for the aibomgen-cli evaluation fram
 Subcommands:
   run        Run all jobs on the current machine (sequential).
   status     Show status of the latest run (or a specific run via --run-id).
-  rescore    Recompute CycloneDX completeness from stored tool outputs.
   aggregate  Aggregate metrics for one run and generate figures.
+
+Every command takes --results-dir, the results root (default results/):
+runs live in <root>/runs/<run-id>/, aggregated output in <root>/aggregated/.
 
 Quick start:
   uv run eval run --run-id my-run-001
-        uv run eval run --run-id my-run-001 --repeats 3
-    uv run eval run --run-id my-run-001 --background
+  uv run eval run --run-id my-run-001 --repeats 3
+  uv run eval run --run-id my-run-001 --background
   uv run eval status --run-id my-run-001
   uv run eval aggregate --run-id my-run-001
 """
@@ -26,7 +28,7 @@ import sys
 import time
 from itertools import groupby
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import click
 import yaml
@@ -34,26 +36,18 @@ from rich.console import Console
 from rich.table import Table
 
 from constants import (
-    AGGREGATED_DIR,
-    CHECKPOINT_FILENAME,
     CONFIG_PATH,
     EVAL_ROOT,
     JOB_INDEX_FILENAME,
-    K_CDX_CONFORMANCE_VALID_V16,
-    LEGACY_TASK_IDS,
     METRICS_FILENAME,
-    RESULTS_DIR,
-    TASK_T1_T2,
-    TASK_T3_T4,
+    RESULTS_ROOT,
+    RUN_MODEL_ID,
 )
-from orchestrator.run_id import latest_run_id
-
-if TYPE_CHECKING:
-    from eval_types import JobSpec
+from orchestrator.run_id import latest_run_id, next_run_id
 
 
 # Load .env from repo root (if present) before anything else.
-def _load_dotenv(path: Path) -> None:
+def load_dotenv(path: Path = EVAL_ROOT / ".env") -> None:
     """Parse a .env file and inject variables into os.environ.
 
     Only sets variables that are not already present in the environment,
@@ -75,7 +69,7 @@ def _load_dotenv(path: Path) -> None:
             os.environ[key] = value
 
 
-_load_dotenv(EVAL_ROOT / ".env")
+load_dotenv()
 
 console = Console()
 
@@ -85,12 +79,17 @@ def cli() -> None:
     """aibomgen-cli evaluation framework."""
 
 
+_RESULTS_DIR_OPTION = click.option(
+    "--results-dir", default=str(RESULTS_ROOT), show_default=True, type=click.Path(path_type=Path),
+    help="Results root: runs in <root>/runs/, aggregated output in <root>/aggregated/.")
+
+
 @cli.command("run")
 @click.option("--run-id", default=None, help="Run ID (auto-generated if omitted).")
-@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
+@_RESULTS_DIR_OPTION
 @click.option("--tools", default=None, help="Comma-separated tool IDs filter.")
-@click.option("--tasks", default=None, help="Comma-separated task IDs filter.")
-@click.option("--skip-done/--no-skip-done", default=True, show_default=True)
+@click.option("--run-type", "run_types", default=None,
+              help="Comma-separated run types to run: model-id, source-scan (default: both).")
 @click.option(
     "--limit",
     default=None,
@@ -101,27 +100,15 @@ def cli() -> None:
     "--cooldown",
     default=None,
     type=float,
-    help="Minutes to wait between tool/task groups (default: 5.0).",
+    help="Minutes to wait between job groups (default: 5.0).",
 )
 @click.option(
     "--repeats",
     "n",
-    "--n",
     default=1,
     show_default=True,
     type=int,
-    help="Repeat count for shared T1_T2 jobs.",
-)
-@click.option(
-    "--order",
-    type=click.Choice(["interleaved", "grouped"]),
-    default="interleaved",
-    show_default=True,
-    help=(
-        "interleaved: for each repeat round, every tool handles every model in turn, so tools "
-        "share the same network conditions and cache state. grouped: all jobs of one "
-        "tool/task first (legacy order)."
-    ),
+    help="Repeat count for model-id jobs (source scans run once).",
 )
 @click.option(
     "--background",
@@ -131,53 +118,52 @@ def cli() -> None:
 )
 def run(
     run_id: str | None,
-    results_dir: str,
+    results_dir: Path,
     tools: str | None,
-    tasks: str | None,
-    skip_done: bool,
+    run_types: str | None,
     limit: int | None,
     cooldown: float | None,
     n: int,
-    order: str,
     background: bool,
 ) -> None:
-    """Run all jobs on the current machine (sequential)."""
+    """Run all jobs on the current machine (sequential).  Jobs that already
+    succeeded in this run (their metrics.json says so) are skipped, so re-running
+    a run ID resumes it.  Every repeat round runs every tool on every input in
+    turn, so tools share network conditions and cache state."""
     if n < 1:
-        click.echo("--repeats/--n must be >= 1.", err=True)
+        click.echo("--repeats must be >= 1.", err=True)
         sys.exit(1)
 
     cfg = _load_config()
-    results_path = Path(results_dir)
+    runs_dir = results_dir / "runs"
 
     if run_id is None:
-        run_id = _next_run_id(results_path)
+        run_id = next_run_id(runs_dir)
 
     if background:
-        run_dir = results_path / run_id
+        run_dir = runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         _daemonize(run_dir, run_id)
         # Child process continues below.
 
     _run_once(
         run_id=run_id,
-        results_dir=results_path,
+        runs_dir=runs_dir,
         cfg=cfg,
         tools=tools,
-        tasks=tasks,
-        skip_done=skip_done,
+        run_types=run_types,
         cooldown=cooldown,
         limit=limit,
         n=n,
-        order=order,
     )
 
 
 @cli.command("status")
 @click.option("--run-id", default=None, help="Specific run ID to inspect.")
-@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
-def status(run_id: str | None, results_dir: str) -> None:
+@_RESULTS_DIR_OPTION
+def status(run_id: str | None, results_dir: Path) -> None:
     """Show status of the latest run or a specific run."""
-    results_path = Path(results_dir)
+    results_path = results_dir / "runs"
 
     if run_id is None:
         run_id = latest_run_id(results_path)
@@ -191,103 +177,20 @@ def status(run_id: str | None, results_dir: str) -> None:
 
 @cli.command("aggregate")
 @click.option("--run-id", required=True, help="Run ID to aggregate.")
-@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
-def aggregate(run_id: str, results_dir: str) -> None:
-    """Run aggregation pipeline for one run and generate figures."""
-    from scoring.aggregate import main as agg_main
-    from analysis.graphs import main as graphs_main
+@_RESULTS_DIR_OPTION
+def aggregate(run_id: str, results_dir: Path) -> None:
+    """Aggregate one run (summary, tables, report) and generate its figures."""
+    from analysis.graphs import make_figures
+    from scoring.aggregate import aggregate_run
 
-    run_dir = Path(results_dir) / run_id
+    run_dir = results_dir / "runs" / run_id
     if not run_dir.exists():
         click.echo(f"Run directory not found: {run_dir}", err=True)
         sys.exit(1)
 
-    agg_main(["--run-id", run_id, "--results-dir", results_dir], standalone_mode=False)
-    graphs_main(["--run-id", run_id], standalone_mode=False)
-
-    summary_path = AGGREGATED_DIR / "data" / run_id / f"{run_id}_summary.json"
+    summary_path = aggregate_run(run_id, results_dir)
+    make_figures(run_id, results_dir)
     console.print(f"[green]Aggregated:[/green] {summary_path}")
-
-
-@cli.command("rescore")
-@click.option("--run-id", required=True, help="Run ID to re-score.")
-@click.option("--results-dir", default=str(RESULTS_DIR), show_default=True)
-def rescore(run_id: str, results_dir: str) -> None:
-    """Recompute scores in stored metrics.json from the saved tool outputs
-    (no tool re-execution): T3 detections + discovery, multi-BOM CycloneDX
-    scores, error classes and legacy task names.  Run `aggregate` afterwards."""
-    from constants import EC_SUCCESS_EMPTY, K_DETECTED_IDS, K_ERROR_CLASS, K_UNIDENTIFIED
-    from runners import REGISTRY
-    from runners.base_runner import _read_tail
-    from scoring.ground_truth import ground_truth_path
-    from scoring.score_cdx import score_cdx_paths
-    from scoring.score_discovery import score_discovery
-    from scoring.score_reliability import classify_error
-
-    run_dir = Path(results_dir) / run_id
-    if not run_dir.exists():
-        click.echo(f"Run directory not found: {run_dir}", err=True)
-        sys.exit(1)
-
-    updated = skipped = 0
-    for metrics_file in sorted(run_dir.rglob(METRICS_FILENAME)):
-        with open(metrics_file) as f:
-            record = json.load(f)
-        runner_cls = REGISTRY.get(record.get("tool", ""))
-        tool_output_dir = metrics_file.parent / "tool_output"
-        if runner_cls is None or not tool_output_dir.is_dir():
-            skipped += 1
-            continue
-
-        task = LEGACY_TASK_IDS.get(record.get("task", ""), record.get("task", ""))
-        record["task"] = task
-        scores = record.get("scores") or {}
-
-        # A scan that exited 0 without writing a file found nothing: valid, zero detections.
-        empty = (
-            task in runner_cls.EMPTY_OUTPUT_TASKS
-            and record.get("exit_code") == 0
-            and not any(tool_output_dir.iterdir())
-        )
-        if empty:
-            record["success"], record["error_message"] = True, None
-            scores[K_ERROR_CLASS] = EC_SUCCESS_EMPTY
-
-        # Like the run itself: only a successful run is scored for T4. A failed run can
-        # still leave a stub BOM behind (ALOHA does for gated models); drop any such
-        # scores so failures never enter the CycloneDX statistics.
-        if record.get("success"):
-            scores.update(score_cdx_paths(runner_cls.cdx_output_paths(tool_output_dir)))
-        else:
-            for key in [k for k in scores if k.startswith("cdx_")]:
-                del scores[key]
-
-        if task == TASK_T3_T4:
-            detected = runner_cls.detections_from_output_dir(tool_output_dir)
-            gt_path = ground_truth_path(record["dataset"])
-            if detected is not None:
-                scores[K_DETECTED_IDS] = detected
-                scores[K_UNIDENTIFIED] = runner_cls.unidentified_from_output_dir(tool_output_dir)
-                if gt_path.exists():
-                    scores.update(score_discovery(detected, gt_path))
-
-        if not record.get("success") and not empty:
-            tail = _read_tail(metrics_file.parent / "stderr.log", 2000) + "\n" + _read_tail(
-                metrics_file.parent / "stdout.log", 2000)
-            scores[K_ERROR_CLASS] = classify_error(record.get("exit_code", -1), tail, None, False)
-
-        record["scores"] = scores
-        with open(metrics_file, "w") as f:
-            json.dump(record, f, indent=2)
-        updated += 1
-
-    console.print(f"[green]Re-scored[/green] {updated} records ({skipped} skipped).")
-
-
-def _git_head(path: Path) -> str:
-    from runners.base_runner import git_commit
-
-    return git_commit(path)
 
 
 def _write_run_meta(
@@ -295,13 +198,14 @@ def _write_run_meta(
     run_id: str,
     cfg: dict,
     jobs: list,
-    order: str,
     repeats: int,
     limit: int | None,
 ) -> None:
     """Write run_meta.json once per run: tool versions/commits, environment and
     per-tool process start-up baselines.  A resumed run keeps its original file."""
     import datetime
+
+    from runners.base_runner import git_commit
 
     meta_path = run_dir / "run_meta.json"
     if not jobs:
@@ -317,9 +221,9 @@ def _write_run_meta(
         meta.setdefault("baselines", {}).update(new_baselines)
         meta.setdefault("reruns", []).append({
             "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "framework_commit": _git_head(EVAL_ROOT),
+            "framework_commit": git_commit(EVAL_ROOT),
             "n_jobs": len(jobs),
-            "tasks": sorted({j["task"] for j in jobs}),
+            "run_types": sorted({j["run_type"] for j in jobs}),
             "tools": sorted({j["tool"] for j in jobs}),
         })
         meta_path.write_text(json.dumps(meta, indent=2))
@@ -330,12 +234,11 @@ def _write_run_meta(
     meta = {
         "run_id": run_id,
         "created": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "framework_commit": _git_head(EVAL_ROOT),
+        "framework_commit": git_commit(EVAL_ROOT),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "host": platform.node(),
         "cpu_count": os.cpu_count(),
-        "order": order,
         "repeats": repeats,
         "limit": limit,
         "n_jobs": len(jobs),
@@ -355,9 +258,9 @@ def _tool_versions_and_baselines(jobs: list, cfg: dict) -> tuple[dict, dict]:
     samples_n = int((cfg.get("run") or {}).get("baseline_samples", 5))
     for job in jobs:
         tool_id = job["tool"]
-        if tool_id in tools or tool_id not in REGISTRY:
+        if tool_id in tools:
             continue
-        runner = REGISTRY[tool_id](job["tool_config"], job["task_config"])
+        runner = REGISTRY[tool_id](job["tool_config"], job["run_type"])
         version, commit = runner.get_version()
         tools[tool_id] = {"version": version, "commit": commit}
         baselines[tool_id] = _measure_baseline(runner, samples_n)
@@ -403,64 +306,56 @@ def _run_post_hooks(jobs: list) -> None:
     done: set[str] = set()
     for job in jobs:
         tool_id = job["tool"]
-        if tool_id in done or tool_id not in REGISTRY:
+        if tool_id in done:
             continue
         done.add(tool_id)
         try:
-            REGISTRY[tool_id](job["tool_config"], job["task_config"]).post_run()
+            REGISTRY[tool_id](job["tool_config"], job["run_type"]).post_run()
         except Exception as exc:  # noqa: BLE001
             console.print(f"[yellow]post_run failed for {tool_id}: {exc}[/yellow]")
 
 
 def _run_once(
     run_id: str,
-    results_dir: Path,
+    runs_dir: Path,
     cfg: dict,
     tools: str | None,
-    tasks: str | None,
-    skip_done: bool,
+    run_types: str | None,
     cooldown: float | None,
     limit: int | None,
     n: int,
-    order: str = "interleaved",
 ) -> None:
-    from orchestrator.checkpoint import Checkpoint
+    from runners import REGISTRY
 
     if limit is None:
         limit = cfg.get("run", {}).get("default_dataset_limit", 100)
 
+    # A typo in a filter must not silently select nothing.
+    for name, value, known in (("--tools", tools, cfg["tools"]), ("--run-type", run_types, cfg["run_types"])):
+        unknown = sorted(set(value.split(",")) - set(known)) if value else []
+        if unknown:
+            raise click.UsageError(f"{name}: unknown {', '.join(unknown)} (known: {', '.join(known)})")
+
     jobs = _build_jobs(
         cfg,
         tool_filter=tools,
-        task_filter=tasks,
+        run_type_filter=run_types,
         dataset_limit=limit,
         n=n,
-        order=order,
     )
 
-    run_dir = results_dir / run_id
+    missing = sorted({j["tool"] for j in jobs} - REGISTRY.keys())
+    if missing:
+        raise click.UsageError(f"No runner registered for: {', '.join(missing)}")
+
+    run_dir = runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    _write_run_meta(run_dir, run_id, cfg, jobs, order=order, repeats=n, limit=limit)
+    _write_run_meta(run_dir, run_id, cfg, jobs, repeats=n, limit=limit)
 
     with open(run_dir / JOB_INDEX_FILENAME, "w") as f:
         json.dump(jobs, f, indent=2)
 
-    checkpoint = Checkpoint(run_dir / CHECKPOINT_FILENAME)
-
-    pending = [
-        job
-        for job in jobs
-        if not (
-            skip_done
-            and checkpoint.is_done(
-                job["tool"],
-                job["task"],
-                job["dataset"],
-                job["input_spec"],
-                job["repeat_index"],
-            )
-        )
-    ]
+    pending = [job for job in jobs if not _job_succeeded(run_dir, job)]
     skipped = len(jobs) - len(pending)
 
     console.print(
@@ -482,17 +377,7 @@ def _run_once(
             f"[dim]({len(group_jobs)} job(s))[/dim]"
         )
         for job in group_jobs:
-            result = _run_job(job, run_dir, cfg)
-            status = "done" if result.success else "failed"
-            checkpoint.mark_done(
-                job["tool"],
-                job["task"],
-                job["dataset"],
-                job["input_spec"],
-                status=status,
-                repeat_index=job["repeat_index"],
-            )
-
+            result = _run_job(job, run_dir)
             retry_note = (
                 f" [yellow](retried {result.retries}x)[/yellow]" if result.retries else ""
             )
@@ -528,85 +413,51 @@ _RUN_DEFAULTS_FOR_RUNNERS = ("max_retries", "retry_delay_seconds", "timeout_seco
 def _build_jobs(
     cfg: dict,
     tool_filter: str | None,
-    task_filter: str | None,
+    run_type_filter: str | None,
     dataset_limit: int | None,
     n: int,
-    order: str = "interleaved",
-) -> list[JobSpec]:
-    """Build the flat job list (repeats expand T1_T2 only) in execution order."""
+) -> list[dict]:
+    """Build the flat job list (repeats expand model-id jobs only) in execution order:
+    one round = every tool over every input, then the next repeat; scans last."""
     tool_ids = set(tool_filter.split(",")) if tool_filter else None
-    task_ids = set(task_filter.split(",")) if task_filter else None
+    run_type_ids = set(run_type_filter.split(",")) if run_type_filter else None
 
-    jobs: list[JobSpec] = []
-    tasks_cfg = cfg.get("tasks", {})
+    jobs: list[dict] = []
+    run_types_cfg = cfg.get("run_types", {})
     tools_cfg = cfg.get("tools", {})
-    hf_token_env = cfg.get("hf", {}).get("token_env", "HF_TOKEN")
-    run_defaults = {
-        k: v for k, v in (cfg.get("run") or {}).items() if k in _RUN_DEFAULTS_FOR_RUNNERS
-    }
 
     for tool_idx, (tool_id, tool_cfg) in enumerate(tools_cfg.items()):
         if tool_ids and tool_id not in tool_ids:
             continue
-        if tool_cfg.get("optional") and not tool_cfg.get("tasks"):
-            continue
 
-        for task_id in tool_cfg.get("tasks", []):
-            if task_ids and task_id not in task_ids:
+        for run_type in tool_cfg.get("run_types", []):
+            if run_type_ids and run_type not in run_type_ids:
                 continue
-            task_cfg = tasks_cfg.get(task_id)
-            if not task_cfg:
+            run_type_cfg = run_types_cfg.get(run_type)
+            if not run_type_cfg:
                 continue
 
-            repeat_count = 1
-            if task_id == TASK_T1_T2:
-                repeat_count = n
+            model_id = run_type == RUN_MODEL_ID
+            repeat_count = n if model_id else 1
 
-            for dataset_idx, dataset in enumerate(task_cfg.get("datasets", [])):
+            for dataset_idx, dataset in enumerate(run_type_cfg.get("datasets", [])):
                 dataset_id = dataset["id"]
                 dataset_type = dataset.get("type", "source-dir")
-                ground_truth = dataset.get("ground_truth", "")
-
                 input_items = _resolve_inputs(dataset, dataset_type, dataset_limit)
-
-                gt_resolved = ""
-                if ground_truth:
-                    gt_path = Path(ground_truth)
-                    if not gt_path.is_absolute():
-                        gt_path = EVAL_ROOT / gt_path
-                    gt_resolved = str(gt_path)
 
                 for input_idx, item in enumerate(input_items):
                     for repeat_index in range(1, repeat_count + 1):
-                        block = 0 if task_id == TASK_T1_T2 else 1
-                        if order == "interleaved":
-                            # one round = every tool over every input, then the next repeat
-                            group = f"{task_id} / round {repeat_index}"
-                            sort_key = (block, repeat_index, dataset_idx, input_idx, tool_idx)
-                        else:
-                            group = f"{tool_id} / {task_id}"
-                            sort_key = (tool_idx, block, dataset_idx, input_idx, repeat_index)
+                        block = 0 if model_id else 1
                         jobs.append(
                             {
-                                "group": group,
-                                "_sort": sort_key,
+                                "group": f"{run_type} / round {repeat_index}",
+                                "_sort": (block, repeat_index, dataset_idx, input_idx, tool_idx),
                                 "tool": tool_id,
-                                "task": task_id,
+                                "run_type": run_type,
                                 "dataset": dataset_id,
                                 "input_spec": item,
                                 "repeat_index": repeat_index,
-                                "ground_truth": gt_resolved,
-                                "hf_token_env": hf_token_env,
-                                "tool_config": {
-                                    **run_defaults,
-                                    **tool_cfg,
-                                    "path": str(_resolve_tool_path(tool_cfg)),
-                                },
-                                "task_config": {
-                                    **task_cfg,
-                                    "id": task_id,
-                                    "current_dataset_ground_truth": gt_resolved,
-                                },
+                                "tool_config": _tool_config(cfg, tool_id),
                             }
                         )
 
@@ -616,102 +467,57 @@ def _build_jobs(
     return jobs
 
 
-def _resolve_tool_path(tool_cfg: dict) -> Path:
+def _tool_config(cfg: dict, tool_id: str) -> dict:
+    """What a runner receives: the run defaults, overridden by the tool's block,
+    plus its id and its path resolved against the repo root."""
+    tool_cfg = cfg["tools"][tool_id]
+    run_defaults = {k: v for k, v in (cfg.get("run") or {}).items() if k in _RUN_DEFAULTS_FOR_RUNNERS}
     path = tool_cfg.get("path", "")
     p = Path(path)
     if not p.is_absolute() and path:
         p = EVAL_ROOT / p
-    return p
+    return {**run_defaults, **tool_cfg, "id": tool_id, "path": str(p)}
 
 
 def _resolve_inputs(dataset: dict, dataset_type: str, limit: int | None = None) -> list[str]:
-    """Resolve a dataset spec into concrete input items."""
-    path = dataset.get("path", "")
+    """Resolve a dataset spec into concrete input items.  A missing or malformed
+    dataset file raises: it must never silently turn into zero jobs."""
+    p = Path(dataset["path"])
+    if not p.is_absolute():
+        p = EVAL_ROOT / p
 
     if dataset_type == "source-dir":
-        p = Path(path)
-        if not p.is_absolute():
-            p = EVAL_ROOT / p
         return [str(p)]
-
-    if dataset_type in ("model-id-list", "model-id-list-labeled"):
-        json_path = Path(path)
-        if not json_path.is_absolute():
-            json_path = EVAL_ROOT / json_path
-        try:
-            with open(json_path) as f:
-                data = json.load(f)
-        except Exception:
-            return []
-
-        if isinstance(data, list):
-            items = data
-        elif dataset_type == "model-id-list":
-            items = data.get("models", [])
-        else:
-            items = [item["id"] for item in data.get("inputs", [])]
-
-        if limit is not None:
-            items = items[:limit]
-        return items
-
-    return [path]
+    if dataset_type == "model-id-list":
+        items = json.loads(p.read_text())["models"]          # {"models": [...]}
+        return items[:limit] if limit is not None else items
+    raise ValueError(f"dataset {dataset['id']!r}: unknown type {dataset_type!r}")
 
 
-def _run_job(job: JobSpec, run_dir: Path, cfg: dict) -> Any:
-    """Instantiate the correct runner and execute one job."""
+def _run_job(job: dict, run_dir: Path) -> Any:
+    """Run one job; the runner writes its metrics.json."""
     from runners import REGISTRY
-    from runners.base_runner import RunResult, input_slug
 
-    tool_id = job["tool"]
-    runner_cls = REGISTRY.get(tool_id)
-    if runner_cls is None:
-        console.print(f"[yellow]No runner for tool '{tool_id}' -- skipping.[/yellow]")
-        import datetime
-
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        return RunResult(
-            run_id=run_dir.name,
-            tool=tool_id,
-            tool_version="unknown",
-            tool_commit="unknown",
-            task=job["task"],
-            dataset=job["dataset"],
-            input_spec=job["input_spec"],
-            timestamp_start=now,
-            timestamp_end=now,
-            duration_seconds=0,
-            peak_memory_mb=None,
-            exit_code=-1,
-            success=False,
-            retries=0,
-            raw_output_path=None,
-            error_message="No runner registered",
-            scores={},
-        )
-
-    runner = runner_cls(job["tool_config"], job["task_config"])
-    hf_token = os.environ.get(job.get("hf_token_env", "HF_TOKEN"))
-
-    result = runner.run(
+    runner = REGISTRY[job["tool"]](job["tool_config"], job["run_type"])
+    return runner.run(
         run_id=run_dir.name,
         input_spec=job["input_spec"],
         dataset_id=job["dataset"],
         results_dir=run_dir.parent,
         repeat_index=job["repeat_index"],
-        hf_token=hf_token,
     )
 
-    output_dir = (
-        run_dir
-        / tool_id
-        / job["task"]
-        / job["dataset"]
-        / input_slug(job["input_spec"])
-        / f"r{job['repeat_index']:02d}"
-    )
-    result.write(output_dir)
-    return result
+
+def _job_succeeded(run_dir: Path, job: dict) -> bool:
+    """True if the job's metrics.json records a successful run (resume skips it)."""
+    from runners.base_runner import job_output_dir
+
+    path = job_output_dir(run_dir, job["tool"], job["run_type"], job["dataset"],
+                          job["input_spec"], job["repeat_index"]) / METRICS_FILENAME
+    try:
+        return bool(json.loads(path.read_text()).get("success"))
+    except (OSError, ValueError):
+        return False
 
 
 def _wait_between_groups(con: Console, seconds: float) -> None:
@@ -731,21 +537,24 @@ def _wait_between_groups(con: Console, seconds: float) -> None:
     con.print("[dim]  Cooldown done -- starting next group.[/dim]\n")
 
 
-def _job_label(job: JobSpec) -> str:
+def _job_label(job: dict) -> str:
     repeat = f"r{job['repeat_index']:02d}"
-    return f"{job['tool']} / {job['task']} / {job['dataset']} / {job['input_spec'][:40]} / {repeat}"
+    return f"{job['tool']} / {job['run_type']} / {job['dataset']} / {job['input_spec'][:40]} / {repeat}"
 
 
 def _status_run(run_id: str, results_path: Path) -> None:
-    from orchestrator.checkpoint import Checkpoint
-
     run_dir = results_path / run_id
     if not run_dir.exists():
         click.echo(f"Run not found: {run_dir}", err=True)
         sys.exit(1)
 
-    checkpoint = Checkpoint(run_dir / CHECKPOINT_FILENAME)
-    stats = checkpoint.stats()
+    outcomes = []
+    for path in run_dir.rglob(METRICS_FILENAME):
+        try:
+            outcomes.append(bool(json.loads(path.read_text()).get("success")))
+        except (OSError, ValueError):
+            continue
+    stats = {"done": sum(outcomes), "failed": len(outcomes) - sum(outcomes), "total": len(outcomes)}
 
     index_path = run_dir / JOB_INDEX_FILENAME
     total_jobs: int | str = "?"
@@ -765,17 +574,10 @@ def _status_run(run_id: str, results_path: Path) -> None:
     table.add_column("Value")
     table.add_row("State", state)
     table.add_row("Total jobs (index)", str(total_jobs))
-    table.add_row("Completed (checkpoint)", str(stats["done"]))
-    table.add_row("Failed (checkpoint)", str(stats["failed"]))
-    table.add_row("Total recorded", str(stats["total"]))
+    table.add_row("Succeeded", str(stats["done"]))
+    table.add_row("Failed", str(stats["failed"]))
+    table.add_row("Total recorded (metrics.json)", str(stats["total"]))
     console.print(table)
-
-
-def _next_run_id(results_dir: Path) -> str:
-    """Compatibility helper using existing run-id allocator behavior."""
-    from orchestrator.run_id import next_run_id
-
-    return next_run_id(results_dir)
 
 
 def _daemonize(run_dir: Path, run_id: str) -> None:

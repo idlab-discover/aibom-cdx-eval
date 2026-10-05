@@ -86,11 +86,6 @@ def model_claims_cyclonedx(output_path: Path) -> tuple[list[str], list[str]]:
     return _deduplicate(ids), _deduplicate(unidentified)
 
 
-def extract_model_ids_cyclonedx(output_path: Path) -> list[str]:
-    """Identified model IDs in a CycloneDX BOM (see ``model_claims_cyclonedx``)."""
-    return model_claims_cyclonedx(output_path)[0]
-
-
 def model_claims_cyclonedx_many(output_paths: list[Path]) -> tuple[list[str], list[str]]:
     """Union of (identified, unidentified) claims over several BOM files
     (scan mode emits one BOM per model)."""
@@ -101,10 +96,6 @@ def model_claims_cyclonedx_many(output_paths: list[Path]) -> tuple[list[str], li
         ids.extend(i)
         unidentified.extend(u)
     return _deduplicate(ids), _deduplicate(unidentified)
-
-
-def extract_model_ids_cyclonedx_many(output_paths: list[Path]) -> list[str]:
-    return model_claims_cyclonedx_many(output_paths)[0]
 
 
 def _cdx_model_id(comp: dict) -> str:
@@ -161,10 +152,6 @@ def model_claims_jorisbot(output_path: Path) -> tuple[list[str], list[str]]:
     return _deduplicate(ids), _deduplicate(unidentified)
 
 
-def extract_model_ids_jorisbot(output_path: Path) -> list[str]:
-    return model_claims_jorisbot(output_path)[0]
-
-
 # ------------------------------------------------------------------ #
 # akumar-aibom  (native JSON: {models:[{model, version, ...}]})
 # ------------------------------------------------------------------ #
@@ -190,7 +177,3 @@ def model_claims_akumar(output_path: Path) -> tuple[list[str], list[str]]:
         else:
             ids.append(model_id)
     return _deduplicate(ids), _deduplicate(unidentified)
-
-
-def extract_model_ids_akumar(output_path: Path) -> list[str]:
-    return model_claims_akumar(output_path)[0]

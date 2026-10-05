@@ -1,28 +1,23 @@
 # ============================================================
 # aibomgen-cli evaluation framework — orchestrator configuration
-# v2  (redesigned task/tool structure)
 # ============================================================
 #
-# Task semantics:
-#   T1_T2 — input is a HuggingFace model ID → AIBOM generation.
-#           A single execution pass; the aggregator derives T1 (performance),
-#           T2 (reliability) and T4-MODELID (CycloneDX quality) from it.
-#   T3_T4 — input is a source-code directory → model discovery + CycloneDX.
-#           A single execution pass; the aggregator derives T3 (discovery) and
-#           T4-SCAN (CycloneDX quality) from it.
+# Run types (what a tool is given):
+#   model-id    — a Hugging Face model ID → AIBOM.  Scored as T1 (performance),
+#                 T2 (reliability) and T4-model-id (CycloneDX quality).
+#   source-scan — a source-code directory → AIBOM.  Scored as T3 (model discovery)
+#                 and T4-source-scan (CycloneDX quality).
 #
-# Tool groups (never compare across groups):
-#   HF model-ID input : aibomgen-cli (generate), OWASP aibom-generator, ALOHA, lab700xorg-aisbom
-#   Source-code scan  : aibomgen-cli (scan), akumar-aibom, jorisbot-aibom, trusera-aibom,
-#                       cdxgen-aibom (OWASP cdxgen, AI-BOM mode), hts-aibom
+# Tools are only compared within a run type:
+#   model-id    : aibomgen-cli (generate), OWASP aibom-generator, ALOHA, lab700xorg-aisbom,
+#                 cdxgen-aibom (pkg:huggingface/ purl), hts-aibom (scan-huggingface)
+#   source-scan : aibomgen-cli (scan), akumar-aibom, jorisbot-aibom, trusera-aibom,
+#                 cdxgen-aibom (AI-BOM mode), hts-aibom
 #
-# CycloneDX-capable (eligible for T4):
-#   T4-MODELID : aibomgen-cli, OWASP aibom-generator, ALOHA, lab700xorg-aisbom
-#   T4-SCAN    : aibomgen-cli, akumar-aibom, trusera-aibom, cdxgen-aibom, hts-aibom
+# T4 scores every tool that writes CycloneDX (all except jorisbot-aibom).
 # ============================================================
 
 run:
-  base_output_dir: "results/runs"
   # Passed to every runner (see orchestrator._build_jobs). A tool block may override any of these.
   max_retries: 3
   retry_delay_seconds: 30
@@ -31,249 +26,89 @@ run:
   default_dataset_limit: 100
   baseline_samples: 5          # no-op invocations timed per tool to estimate process start-up cost
 
-hf:
-  token_env: "HF_TOKEN"
-
+# Every tool needs a runner in runners/__init__.py REGISTRY. Display names: constants.TOOL_LABELS.
+# uv tools run with --frozen: their dependencies come from the lock installed by scripts/setup.sh.
 tools:
 
   aibomgen-cli:
-    id: aibomgen-cli
-    display_name: "aibomgen-cli"
-    runtime: binary
-    binary: "/home/ubuntu/go/bin/aibomgen-cli"
-    tasks: ["T1_T2", "T3_T4"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["model-id", "source-scan"]
-    optional: false
-    source_repo: "/home/ubuntu/aibomgen-cli"   # git checkout the binary is built from (version provenance)
+    path: "tools/aibomgen-cli"     # submodule; scripts/setup.sh builds <path>/aibomgen-cli
+    run_types: ["model-id", "source-scan"]
 
   aibom-generator:
-    id: aibom-generator
-    display_name: "OWASP aibom-generator"
-    runtime: uv
     path: "tools/aibom-generator"
-    entry: ["uv", "run", "python", "-m", "src.cli"]
-    tasks: ["T1_T2"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["model-id"]
-    optional: false
+    entry: ["uv", "run", "--frozen", "python", "-m", "src.cli"]
+    run_types: ["model-id"]
 
+  # Run as on GitHub: ALOHA sends no Hub token, so gated models fail for it.
   ALOHA:
-    id: ALOHA
-    display_name: "ALOHA"
-    runtime: uv
     path: "tools/ALOHA"
     entry: ["uv", "run", "--with-requirements", "requirements.txt", "python", "ALOHA.py"]
-    tasks: ["T1_T2"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["model-id"]
-    optional: false
-    notes: "ALOHA reads HF_TOKEN from the environment via _hf_headers(); token is forwarded by the eval framework."
+    run_types: ["model-id"]
 
+  # `aisbom scan hf://{model_id}` (zero-download header inspection), run from the tool's own
+  # .venv (see the runner). It scans binary ML artifacts, not source code, so it is not in source-scan.
   lab700xorg-aisbom:
-    id: lab700xorg-aisbom
-    display_name: "lab700xorg-aisbom"
-    runtime: uv
     path: "tools/lab700xorg-aisbom"
-    entry: ["uv", "run", "aisbom"]
-    tasks: ["T1_T2"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["model-id"]
-    optional: false
-    tool_flags: ["--no-fail-on-risk"]
-    notes: >
-      Uses `aisbom scan hf://{model_id}` (zero-download header inspection).
-      Scans binary ML artifacts; NOT in T3_T4 (source-code-reference scanning).
+    run_types: ["model-id"]
 
   akumar-aibom:
-    id: akumar-aibom
-    display_name: "akumar-aibom"
-    runtime: uv
     path: "tools/akumar-aibom"
-    entry: ["uv", "run", "aibom"]
-    tasks: ["T3_T4"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["source-scan"]
-    optional: false
-    cleanup_side_effects: true
+    entry: ["uv", "run", "--frozen", "aibom"]
+    run_types: ["source-scan"]
 
-  jorisbot-aibom:
-    id: jorisbot-aibom
-    display_name: "jorisbot-aibom"
-    runtime: uv
+  jorisbot-aibom:              # custom JSON output, not CycloneDX: no T4
     path: "tools/jorisbot-aibom"
-    entry: ["uv", "run", "aibom"]
-    tasks: ["T3_T4"]
-    output_format: custom-json
-    cdx_capable: false
-    t4_inputs: []
-    optional: false
+    entry: ["uv", "run", "--frozen", "aibom"]
+    run_types: ["source-scan"]
 
   trusera-aibom:
-    id: trusera-aibom
-    display_name: "trusera-aibom (ai-bom)"
-    runtime: uv
     path: "tools/trusera-aibom"
-    entry: ["uv", "run", "ai-bom"]
-    tasks: ["T3_T4"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["source-scan"]
-    optional: false
+    entry: ["uv", "run", "--frozen", "ai-bom"]
+    run_types: ["source-scan"]
 
+  # OWASP CycloneDX generator, `aibom` command (project type `ai`; its model-id input is a
+  # pkg:huggingface/ purl). Needs Node.js >= 20.
   cdxgen-aibom:
-    id: cdxgen-aibom
-    display_name: "cdxgen (AI-BOM)"
-    runtime: node
-    path: "tools/cdxgen"            # npm project pinning @cyclonedx/cdxgen (see its package.json)
-    tasks: ["T3_T4"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["source-scan"]
-    optional: false
-    notes: "OWASP CycloneDX generator, `aibom` command (project type `ai`). Needs Node.js >= 20."
+    path: "tools/cdxgen"            # submodule at tag v12.8.5; scripts/setup.sh installs its pnpm-lock.yaml
+    run_types: ["model-id", "source-scan"]
 
   hts-aibom:
-    id: hts-aibom
-    display_name: "HTS AiBOM"
-    runtime: uv
     path: "tools/hts-aibom"
-    entry: ["uv", "run", "python", "-m", "aibom"]
-    tasks: ["T3_T4"]
-    output_format: cyclonedx-json
-    cdx_capable: true
-    t4_inputs: ["source-scan"]
-    optional: false
+    entry: ["uv", "run", "--frozen", "python", "-m", "aibom"]
+    run_types: ["model-id", "source-scan"]
 
-  cisco-aibom:
-    id: cisco-aibom
-    display_name: "cisco-aibom"
-    runtime: uv
-    path: "tools/cisco-aibom/aibom"
-    entry: ["uv", "run", "cisco-aibom"]
-    tasks: []
-    output_format: cyclonedx-json
-    cdx_capable: false
-    t4_inputs: []
-    optional: true
-    skip_reason: "Requires --llm-model and LLM API key in all modes."
+# Ground truth for a source-scan dataset is benchmarks/ground-truth/T3-source-scan/<id>.json.
+run_types:
 
-tasks:
-
-  T1_T2:
-    id: T1_T2
-    display_name: "HF Model ID → AIBOM (Performance + Reliability)"
-    description: >
-      Given a HuggingFace model ID, generate an AIBOM document.
-      Aggregator splits into T1 (performance: normalised throughput) and
-      T2 (reliability: success rate + error classification).
+  model-id:
     datasets:
-      - id: popular
-        path: "benchmarks/datasets/model-ids/popular.json"
-        type: model-id-list
-    scorers: [performance, reliability, cdx_conformance, cdx_completeness]
+      - {id: popular, path: "benchmarks/datasets/model-ids/popular.json", type: model-id-list}
 
-  T3_T4:
-    id: T3_T4
-    display_name: "Repo Source Scan (Discovery + CycloneDX Conformance)"
-    description: >
-      Scan a source repository for model references.
-      Aggregator splits into T3 (discovery: precision/recall/F1) and
-      T4-SCAN (CycloneDX conformance + field completeness for CDX tools).
+  source-scan:
     datasets:
       # python scope
-      - id: target-01-python
-        path: "targets/target-01-python"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-01-python.json"
-        scope_bucket: "python"
-      - id: target-02-python
-        path: "targets/target-02-python"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-02-python.json"
-        scope_bucket: "python"
-      - id: target-03-python
-        path: "targets/target-03-python"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-03-python.json"
-        scope_bucket: "python"
-      - id: target-04-python
-        path: "targets/target-04-python"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-04-python.json"
-        scope_bucket: "python"
+      - {id: target-01-python, path: "targets/target-01-python", type: source-dir, scope_bucket: python}
+      - {id: target-02-python, path: "targets/target-02-python", type: source-dir, scope_bucket: python}
+      - {id: target-03-python, path: "targets/target-03-python", type: source-dir, scope_bucket: python}
+      - {id: target-04-python, path: "targets/target-04-python", type: source-dir, scope_bucket: python}
 
       # mixed scope
-      - id: target-05-mixed
-        path: "targets/target-05-mixed"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-05-mixed.json"
-        scope_bucket: "mixed"
-      - id: target-06-mixed
-        path: "targets/target-06-mixed"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-06-mixed.json"
-        scope_bucket: "mixed"
-      - id: target-07-mixed
-        path: "targets/target-07-mixed"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-07-mixed.json"
-        scope_bucket: "mixed"
-      - id: target-08-mixed
-        path: "targets/target-08-mixed"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-08-mixed.json"
-        scope_bucket: "mixed"
+      - {id: target-05-mixed, path: "targets/target-05-mixed", type: source-dir, scope_bucket: mixed}
+      - {id: target-06-mixed, path: "targets/target-06-mixed", type: source-dir, scope_bucket: mixed}
+      - {id: target-07-mixed, path: "targets/target-07-mixed", type: source-dir, scope_bucket: mixed}
+      - {id: target-08-mixed, path: "targets/target-08-mixed", type: source-dir, scope_bucket: mixed}
 
       # config scope
-      - id: target-09-config
-        path: "targets/target-09-config"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-09-config.json"
-        scope_bucket: "config"
-      - id: target-10-config
-        path: "targets/target-10-config"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-10-config.json"
-        scope_bucket: "config"
-      - id: target-11-config
-        path: "targets/target-11-config"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-11-config.json"
-        scope_bucket: "config"
-      - id: target-12-config
-        path: "targets/target-12-config"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-12-config.json"
-        scope_bucket: "config"
+      - {id: target-09-config, path: "targets/target-09-config", type: source-dir, scope_bucket: config}
+      - {id: target-10-config, path: "targets/target-10-config", type: source-dir, scope_bucket: config}
+      - {id: target-11-config, path: "targets/target-11-config", type: source-dir, scope_bucket: config}
+      - {id: target-12-config, path: "targets/target-12-config", type: source-dir, scope_bucket: config}
 
       # cloud_api scope
-      - id: target-13-cloud-api
-        path: "targets/target-13-cloud-api"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-13-cloud-api.json"
-        scope_bucket: "cloud_api"
-      - id: target-14-cloud-api
-        path: "targets/target-14-cloud-api"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-14-cloud-api.json"
-        scope_bucket: "cloud_api"
-        notes: "Cloud-AI chatbot (LangChain + OpenAI + Anthropic + Ollama). Tests cloud-API class-instantiation patterns; no HuggingFace transformers."
-      - id: target-15-cloud-api
-        path: "targets/target-15-cloud-api"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-15-cloud-api.json"
-        scope_bucket: "cloud_api"
-        notes: "Hybrid RAG: local HuggingFace embeddings (from_pretrained + SentenceTransformer) + cloud LLM generation (ChatOpenAI + ChatAnthropic). Tests tools that span both pattern families."
-      - id: target-16-cloud-api
-        path: "targets/target-16-cloud-api"
-        type: source-dir
-        ground_truth: "benchmarks/ground-truth/T3-source-scan/target-16-cloud-api.json"
-        scope_bucket: "cloud_api"
-        notes: "Multi-agent pipeline: direct OpenAI/Anthropic SDK clients (model= in .create() calls) + Ollama class instantiation + YAML config. Tests deeper extraction beyond class constructors."
-    scorers: [discovery, cdx_conformance, cdx_completeness]
+      - {id: target-13-cloud-api, path: "targets/target-13-cloud-api", type: source-dir, scope_bucket: cloud_api}
+      # target-14-cloud-api: Cloud-AI chatbot (LangChain + OpenAI + Anthropic + Ollama). Tests cloud-API class-instantiation patterns; no HuggingFace transformers.
+      - {id: target-14-cloud-api, path: "targets/target-14-cloud-api", type: source-dir, scope_bucket: cloud_api}
+      # target-15-cloud-api: Hybrid RAG: local HuggingFace embeddings (from_pretrained + SentenceTransformer) + cloud LLM generation (ChatOpenAI + ChatAnthropic). Tests tools that span both pattern families.
+      - {id: target-15-cloud-api, path: "targets/target-15-cloud-api", type: source-dir, scope_bucket: cloud_api}
+      # target-16-cloud-api: Multi-agent pipeline: direct OpenAI/Anthropic SDK clients (model= in .create() calls) + Ollama class instantiation + YAML config. Tests deeper extraction beyond class constructors.
+      - {id: target-16-cloud-api, path: "targets/target-16-cloud-api", type: source-dir, scope_bucket: cloud_api}

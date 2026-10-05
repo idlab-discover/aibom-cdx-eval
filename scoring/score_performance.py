@@ -28,7 +28,7 @@ from typing import Any
 # ── leaf-field counter ─────────────────────────────────────────────────────
 
 
-def _count_leaves(obj: Any, path: str = "") -> int:
+def _count_leaves(obj: Any) -> int:
     """Recursively count structural-breadth leaf values.
 
     Arrays of objects are deduplicated: only the first element's structure
@@ -40,18 +40,14 @@ def _count_leaves(obj: Any, path: str = "") -> int:
         return 0
 
     if isinstance(obj, dict):
-        total = 0
-        for k, v in obj.items():
-            child_path = f"{path}.{k}" if path else k
-            total += _count_leaves(v, child_path)
-        return total
+        return sum(_count_leaves(v) for v in obj.values())
 
     if isinstance(obj, list):
         if len(obj) == 0:
             return 0
         if isinstance(obj[0], dict):
             # Deduplicate: count the structure of ONE element only.
-            return _count_leaves(obj[0], f"{path}[]")
+            return _count_leaves(obj[0])
         # Scalar list (e.g. tags[]) — count as presence.
         return 1
 
@@ -62,11 +58,6 @@ def _count_leaves(obj: Any, path: str = "") -> int:
         return 1  # booleans are always present
     # int / float
     return 1
-
-
-def count_leaf_fields(bom: Any) -> int:
-    """Return the normalised field count for a parsed JSON BOM."""
-    return _count_leaves(bom)
 
 
 # ── public scorer ──────────────────────────────────────────────────────────
@@ -87,19 +78,11 @@ def score_performance(output_path: Path, duration_seconds: float) -> dict[str, A
             "size_normalized_throughput":  float | None,   # fields / byte
         }
     """
-    if output_path is None or not output_path.exists():
-        return {
-            "fields_present": None,
-            "output_size_bytes": None,
-            "normalized_throughput": None,
-            "size_normalized_throughput": None,
-        }
-
     try:
         raw = output_path.read_bytes()
         output_size_bytes = len(raw)
         bom = json.loads(raw)
-    except Exception:
+    except Exception:   # missing (None / not there) or unreadable output
         return {
             "fields_present": None,
             "output_size_bytes": None,
@@ -107,7 +90,7 @@ def score_performance(output_path: Path, duration_seconds: float) -> dict[str, A
             "size_normalized_throughput": None,
         }
 
-    fields_present = count_leaf_fields(bom)
+    fields_present = _count_leaves(bom)
 
     normalized_throughput: float | None = None
     if duration_seconds and duration_seconds > 0:

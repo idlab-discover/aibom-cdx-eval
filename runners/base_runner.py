@@ -8,6 +8,7 @@ from __future__ import annotations
 import abc
 import dataclasses
 import datetime
+import functools
 import hashlib
 import json
 import os
@@ -25,12 +26,16 @@ from constants import (
     K_DETECTED_IDS,
     K_ERROR_CLASS,
     K_UNIDENTIFIED,
+    METRICS_FILENAME,
+    RUN_SOURCE_SCAN,
 )
 
-from scoring.score_discovery import score_discovery       # noqa: E402
-from scoring.score_performance import score_performance   # noqa: E402
-from scoring.score_reliability import score_reliability   # noqa: E402
-from scoring.utils import resolve_ground_truth_path       # noqa: E402
+from scoring.extract import model_claims_cyclonedx_many
+from scoring.ground_truth import ground_truth_path
+from scoring.score_cdx import score_cdx_paths
+from scoring.score_discovery import score_discovery
+from scoring.score_performance import score_performance
+from scoring.score_reliability import classify_error
 
 
 @dataclasses.dataclass
@@ -39,7 +44,7 @@ class RunResult:
     tool: str
     tool_version: str
     tool_commit: str
-    task: str
+    run_type: str
     dataset: str
     input_spec: str
     timestamp_start: str
@@ -59,7 +64,7 @@ class RunResult:
 
     def write(self, output_dir: Path) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
-        path = output_dir / "metrics.json"
+        path = output_dir / METRICS_FILENAME
         with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
         return path
@@ -71,10 +76,10 @@ class BaseRunner(abc.ABC):
 
     Subclasses must implement:
       - build_command(input_spec, output_dir, run_env) → list[str]
-      - locate_output(output_dir) → Path | None
-      - score(output_path, input_spec) → dict
 
     Optional overrides:
+      - locate_output(output_dir) → Path | None
+      - score(output_path, input_spec) → dict
       - working_dir() → Path
       - get_version() → (str, str)
     """
@@ -83,9 +88,9 @@ class BaseRunner(abc.ABC):
     RETRY_DELAY: int = 30   # seconds
     TIMEOUT: int = 1800     # seconds (30 min)
 
-    def __init__(self, tool_config: dict, task_config: dict) -> None:
+    def __init__(self, tool_config: dict, run_type: str) -> None:
         self.tool_config = tool_config
-        self.task_config = task_config
+        self.run_type = run_type          # RUN_MODEL_ID or RUN_SOURCE_SCAN
         self._tool_id = tool_config["id"]
 
     # ------------------------------------------------------------------ #
@@ -112,7 +117,7 @@ class BaseRunner(abc.ABC):
         return p
 
     def pre_run(self) -> None:
-        """Called once before the subprocess loop. Override to apply
+        """Called before each job's subprocess loop (keep it idempotent). Override to apply
         local patches or environment fixups without touching the submodule
         git history.
         """
@@ -122,8 +127,7 @@ class BaseRunner(abc.ABC):
 
         Override to inspect stdout/stderr and return a non-zero code when the
         tool silently fails (e.g. exits 0 on a rate-limit error).  The returned
-        code is used for the retry decision; the original ``proc.returncode``
-        is NOT modified for the final result.
+        code drives the retry decision and is the exit code recorded for the run.
         """
         return exit_code
 
@@ -134,6 +138,10 @@ class BaseRunner(abc.ABC):
         their working directory or the scanned target directory.
         Called unconditionally after each run.
         """
+
+    def after_success(self, tool_output_dir: Path) -> None:
+        """Called once after the tool exited 0, before scoring.  Override for extra
+        steps such as converting the output to CycloneDX."""
 
     def post_run(self) -> None:
         """Called once after the last job of a run (e.g. to undo local patches)."""
@@ -148,13 +156,13 @@ class BaseRunner(abc.ABC):
         """Cheap no-op invocation used to measure per-tool process start-up cost."""
         return list(self.tool_config.get("entry", [])) + ["--help"]
 
-    # Tasks for which exit 0 + no output artifact is a valid empty result (zero
+    # Run types for which exit 0 + no output artifact is a valid empty result (zero
     # detections) rather than a failure: scan tools that write nothing when they
     # find nothing.
-    EMPTY_OUTPUT_TASKS: frozenset[str] = frozenset()
+    EMPTY_OUTPUT_RUN_TYPES: frozenset[str] = frozenset()
 
     def empty_output_is_valid(self) -> bool:
-        return self.task_config["id"] in self.EMPTY_OUTPUT_TASKS
+        return self.run_type in self.EMPTY_OUTPUT_RUN_TYPES
 
     def locate_output(self, output_dir: Path) -> Path | None:
         """Find the primary output file produced in output_dir."""
@@ -164,41 +172,61 @@ class BaseRunner(abc.ABC):
                 return matches[0]
         return None
 
-    # -- directory-based lookups (shared by run-time scoring and `eval rescore`) --
-
-    @classmethod
-    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str] | None:
-        """Model IDs the tool reported for a scan run; None if not a discovery tool."""
-        return None
-
-    @classmethod
-    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
-        """Model claims that name no model (reported separately, not scored)."""
-        return []
+    # -- output lookups --
 
     @classmethod
     def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
         """CycloneDX files to score for T4 (default: every top-level JSON file)."""
         return sorted(tool_output_dir.glob("*.json"))
 
-    def _discovery_scores(self, detected: list[str]) -> dict[str, Any]:
-        scores: dict[str, Any] = {
-            K_DETECTED_IDS: detected,
-            K_UNIDENTIFIED: self.unidentified_from_output_dir(self.tool_output_dir),
-        }
-        gt_path = resolve_ground_truth_path(
-            self.task_config.get("current_dataset_ground_truth") or None, EVAL_ROOT
-        )
-        if gt_path and gt_path.exists():
-            scores.update(score_discovery(detected, gt_path))
+    @classmethod
+    def claims_from_output_dir(cls, tool_output_dir: Path) -> tuple[list[str], list[str]]:
+        """(identified, unidentified) model claims of a scan run; the default reads
+        the CycloneDX BOMs.  Unidentified claims name no model and are not scored."""
+        return model_claims_cyclonedx_many(cls.cdx_output_paths(tool_output_dir))
+
+    def score(self) -> dict[str, Any]:
+        """Scores of a successful run: CycloneDX quality of every BOM (T4) and, for a
+        scan, the detections matched against the target's ground truth (T3)."""
+        scores = score_cdx_paths(self.cdx_output_paths(self.tool_output_dir))
+        if self.run_type == RUN_SOURCE_SCAN:
+            detected, unidentified = self.claims_from_output_dir(self.tool_output_dir)
+            scores[K_DETECTED_IDS] = detected
+            scores[K_UNIDENTIFIED] = unidentified
+            gt_path = ground_truth_path(self.dataset_id)
+            if gt_path.exists():
+                scores.update(score_discovery(detected, gt_path))
         return scores
 
-    def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
-        """
-        Score the tool output. Called when success=True (``output_path`` is None
-        only for a valid empty scan result). ``self.tool_output_dir`` is set.
-        """
-        return {}
+    def evaluate(self, exit_code: int, log_tail: str, duration: float
+                 ) -> tuple[bool, str | None, str | None, dict[str, Any]]:
+        """Judge a finished run from its exit code and its files in
+        ``self.tool_output_dir``: (success, error message or None, raw output path,
+        scores)."""
+        success = exit_code == 0
+        error_msg: str | None = None
+        raw_output_path: str | None = None
+        scores: dict[str, Any] = {}
+        found = self.locate_output(self.tool_output_dir)
+        if success and found:
+            try:
+                raw_output_path = str(found.relative_to(EVAL_ROOT))
+            except ValueError:
+                raw_output_path = str(found)
+            scores.update(score_performance(found, duration))
+            scores.update(self.score())
+            scores[K_ERROR_CLASS] = classify_error(exit_code, log_tail, found, True)
+        elif success and self.empty_output_is_valid():
+            # Scan tool that found nothing: a valid result with zero detections.
+            scores.update(self.score())
+            scores[K_ERROR_CLASS] = EC_SUCCESS_EMPTY
+        else:
+            if success:
+                success = False
+                error_msg = ("Process exited successfully but no output artifact was found "
+                             f"in {self.tool_output_dir}")
+            scores[K_ERROR_CLASS] = classify_error(exit_code, log_tail, found, False)
+        return success, error_msg, raw_output_path, scores
 
     # ------------------------------------------------------------------ #
     # Public entry point                                                   #
@@ -211,44 +239,29 @@ class BaseRunner(abc.ABC):
         dataset_id: str,
         results_dir: Path,
         repeat_index: int = 1,
-        hf_token: str | None = None,
-        max_retries: int | None = None,
-        timeout: int | None = None,
     ) -> RunResult:
         """
-        Execute the tool for one (input_spec, dataset_id) pair,
-        capture timing + memory, retry on failure, and return a RunResult.
+        Execute the tool for one (input_spec, dataset_id) pair, capture timing +
+        memory, retry on failure, write metrics.json and return the RunResult.
         """
-        if max_retries is None:
-            max_retries = int(self.tool_config.get("max_retries", self.MAX_RETRIES))
-        if timeout is None:
-            timeout = int(self.tool_config.get("timeout_seconds", self.TIMEOUT))
+        max_retries = int(self.tool_config.get("max_retries", self.MAX_RETRIES))
+        timeout = int(self.tool_config.get("timeout_seconds", self.TIMEOUT))
         retry_delay = float(self.tool_config.get("retry_delay_seconds", self.RETRY_DELAY))
         retry_on_timeout = bool(self.tool_config.get("retry_on_timeout", False))
 
-        # Per-input output directory to prevent collisions across model IDs.
-        # Layout: results/runs/<run_id>/<tool>/<task>/<dataset>/<input_slug>/rNN/
-        output_dir = (
-            results_dir
-            / run_id
-            / self._tool_id
-            / self.task_config["id"]
-            / dataset_id
-            / input_slug(input_spec)
-            / f"r{repeat_index:02d}"
-        )
+        output_dir = job_output_dir(results_dir / run_id, self._tool_id, self.run_type,
+                                    dataset_id, input_spec, repeat_index)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         tool_output_dir = output_dir / "tool_output"
         tool_output_dir.mkdir(exist_ok=True)
         self.tool_output_dir = tool_output_dir
+        self.dataset_id = dataset_id
 
-        # Build subprocess environment
+        # Subprocess environment: HF_TOKEN (shell or .env) under the other names tools read.
         run_env = dict(os.environ)
-        if hf_token:
-            run_env["HF_TOKEN"] = hf_token
-            run_env["HUGGINGFACE_TOKEN"] = hf_token
-            run_env["HF_HUB_TOKEN"] = hf_token
+        if run_env.get("HF_TOKEN"):
+            run_env["HUGGINGFACE_TOKEN"] = run_env["HF_HUB_TOKEN"] = run_env["HF_TOKEN"]
         run_env["PYTHONHASHSEED"] = DETERMINISM_ENV["PYTHONHASHSEED"]
         run_env.setdefault("TRANSFORMERS_SEED", DETERMINISM_ENV["TRANSFORMERS_SEED"])
 
@@ -326,60 +339,29 @@ class BaseRunner(abc.ABC):
         # total_wall_seconds keeps the whole span for transparency.
         duration = attempt_duration
         total_wall = (ts_end - ts_start).total_seconds()
-        success = exit_code == 0
-        empty_result = False
 
-        raw_output_path: str | None = None
-        scores: dict[str, Any] = {}
-        stderr_text = _read_tail(stderr_log, 2000) + "\n" + _read_tail(stdout_log, 2000)
+        if exit_code == 0:
+            self.after_success(tool_output_dir)
+        log_tail = _read_tail(stderr_log, 2000) + "\n" + _read_tail(stdout_log, 2000)
+        success, eval_error, raw_output_path, scores = self.evaluate(exit_code, log_tail, duration)
+        if eval_error:
+            error_msg = eval_error
+        elif not success and error_msg is None:
+            error_msg = _build_error_message(stderr_log, stdout_log)
 
-        if success:
-            found = self.locate_output(tool_output_dir)
-            if found:
-                try:
-                    raw_output_path = str(found.relative_to(EVAL_ROOT))
-                except ValueError:
-                    raw_output_path = str(found)
-                # Performance metrics (T1_T2 runs benefit most, but compute always)
-                perf = score_performance(found, duration)
-                scores.update(perf)
-                # Tool-specific scores (discovery, cdx, etc.)
-                scores.update(self.score(found, input_spec))
-            elif self.empty_output_is_valid():
-                # Scan tool that found nothing: a valid result with zero detections.
-                empty_result = True
-                scores.update(self.score(None, input_spec))
-            else:
-                success = False
-                error_msg = (
-                    "Process exited successfully but no output artifact was found "
-                    f"in {tool_output_dir}"
-                )
-        else:
-            if error_msg is None:
-                error_msg = _build_error_message(stderr_log, stdout_log)
-
-        # Reliability classification — always computed (success or failure)
-        found_path = self.locate_output(tool_output_dir) if not success else (
-            Path(EVAL_ROOT / raw_output_path) if raw_output_path else None
-        )
-        rel = score_reliability(exit_code, stderr_text, found_path, success)
-        if empty_result:
-            rel[K_ERROR_CLASS] = EC_SUCCESS_EMPTY
-        scores.update(rel)
-
-        # Unconditional cleanup of tool side-effect files
+        # Unconditional cleanup of tool side-effect files.  A failure is reported, not
+        # fatal: a leftover file could contaminate the next tool's scan of the target.
         try:
             self.cleanup_side_effects(tool_output_dir, input_spec)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"  !  cleanup_side_effects failed for {self._tool_id}: {exc}", flush=True)
 
-        return RunResult(
+        result = RunResult(
             run_id=run_id,
             tool=self._tool_id,
             tool_version=version,
             tool_commit=commit,
-            task=self.task_config["id"],
+            run_type=self.run_type,
             dataset=dataset_id,
             input_spec=input_spec,
             timestamp_start=ts_start.isoformat(),
@@ -394,34 +376,29 @@ class BaseRunner(abc.ABC):
             scores=scores,
             total_wall_seconds=total_wall,
         )
+        result.write(output_dir)
+        return result
 
 
 # ------------------------------------------------------------------ #
 # Private helpers                                                      #
 # ------------------------------------------------------------------ #
 
-_VERSION_CACHE: dict[str, str] = {}
-
-
+@functools.cache
 def package_version(path: Path) -> str:
     """Version from the checkout's pyproject.toml ([project] or [tool.poetry])."""
-    key = f"pkg:{path}"
-    if key not in _VERSION_CACHE:
-        version = "unknown"
-        try:
-            import tomllib
+    try:
+        import tomllib
 
-            data = tomllib.loads((path / "pyproject.toml").read_text())
-            version = str(
-                (data.get("project") or {}).get("version")
-                or ((data.get("tool") or {}).get("poetry") or {}).get("version")
-                or _dynamic_version(path, data)
-                or "unknown"
-            )
-        except Exception:
-            pass
-        _VERSION_CACHE[key] = version
-    return _VERSION_CACHE[key]
+        data = tomllib.loads((path / "pyproject.toml").read_text())
+        return str(
+            (data.get("project") or {}).get("version")
+            or ((data.get("tool") or {}).get("poetry") or {}).get("version")
+            or _dynamic_version(path, data)
+            or "unknown"
+        )
+    except Exception:
+        return "unknown"
 
 
 def _dynamic_version(path: Path, pyproject: dict) -> str | None:
@@ -442,26 +419,22 @@ def _dynamic_version(path: Path, pyproject: dict) -> str | None:
     return None
 
 
+@functools.cache
 def git_commit(path: Path) -> str:
     """Short commit of the git checkout containing ``path`` (+ ``-dirty`` if
     tracked files are modified); ``unknown`` if it is not a git checkout."""
-    key = f"git:{path}"
-    if key not in _VERSION_CACHE:
-        commit = "unknown"
-        try:
-            head = subprocess.run(
-                ["git", "-C", str(path), "rev-parse", "--short=12", "HEAD"],
-                capture_output=True, text=True, timeout=10, check=True,
-            ).stdout.strip()
-            dirty = subprocess.run(
-                ["git", "-C", str(path), "status", "--porcelain", "--untracked-files=no"],
-                capture_output=True, text=True, timeout=10, check=True,
-            ).stdout.strip()
-            commit = head + ("-dirty" if dirty else "")
-        except Exception:
-            pass
-        _VERSION_CACHE[key] = commit
-    return _VERSION_CACHE[key]
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(path), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        return head + ("-dirty" if dirty else "")
+    except Exception:
+        return "unknown"
 
 
 def _parse_gnu_time_memory(time_file: Path) -> float | None:
@@ -496,6 +469,12 @@ def _build_error_message(stderr_log: Path, stdout_log: Path) -> str:
     if stdout_tail:
         parts.append(f"stdout:\n{stdout_tail}")
     return "\n\n".join(parts) if parts else ""
+
+
+def job_output_dir(run_dir: Path, tool: str, run_type: str, dataset: str,
+                   input_spec: str, repeat_index: int) -> Path:
+    """<root>/runs/<run>/<tool>/<run_type>/<dataset>/<input_slug>/rNN"""
+    return run_dir / tool / run_type / dataset / input_slug(input_spec) / f"r{repeat_index:02d}"
 
 
 def input_slug(input_spec: str, max_len: int = 80) -> str:

@@ -13,9 +13,16 @@
 [submodule "tools/trusera-aibom"]
 	path = tools/trusera-aibom
 	url = https://github.com/Trusera/ai-bom.git
-[submodule "tools/cisco-aibom"]
-	path = tools/cisco-aibom
-	url = https://github.com/cisco-ai-defense/aibom.git
 [submodule "tools/hts-aibom"]
 	path = tools/hts-aibom
 	url = https://github.com/Hts-Public-Fork/aibom.git
+[submodule "tools/aibomgen-cli"]
+	path = tools/aibomgen-cli
+	url = https://github.com/idlab-discover/aibomgen-cli.git
+[submodule "tools/ALOHA"]
+	path = tools/ALOHA
+	url = https://github.com/MSR4SBOM/ALOHA.git
+[submodule "tools/cdxgen"]
+	path = tools/cdxgen
+	url = https://github.com/cdxgen/cdxgen.git
+	shallow = true

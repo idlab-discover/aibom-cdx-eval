@@ -1,16 +1,15 @@
 """
 Runner for jorisbot-aibom.
-Task: T3_T4 — `uv run aibom scan <source_dir> --output <file> --format json`
+Run type: source-scan — `uv run aibom scan <source_dir> --output <file> --format json`
 Output: Custom JSON {models[{name, provider, model_card_url, detected_in}], datasets[], ...}
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from runners.base_runner import BaseRunner
-from scoring.extract import extract_model_ids_jorisbot, model_claims_jorisbot
+from scoring.extract import model_claims_jorisbot
 
 
 class JorisbotAibomRunner(BaseRunner):
@@ -20,7 +19,7 @@ class JorisbotAibomRunner(BaseRunner):
         self, input_spec: str, output_dir: Path, run_env: dict
     ) -> list[str]:
         output_file = output_dir / "report.json"
-        entry = self.tool_config.get("entry", ["uv", "run", "aibom"])
+        entry = self.tool_config["entry"]
         return entry + [
             "scan",
             input_spec,
@@ -33,18 +32,9 @@ class JorisbotAibomRunner(BaseRunner):
         return p if p.exists() else None
 
     @classmethod
-    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
-        return model_claims_jorisbot(tool_output_dir / "report.json")[1]
-
-    @classmethod
-    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
-        return extract_model_ids_jorisbot(tool_output_dir / "report.json")
+    def claims_from_output_dir(cls, tool_output_dir: Path) -> tuple[list[str], list[str]]:
+        return model_claims_jorisbot(tool_output_dir / "report.json")
 
     @classmethod
     def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
         return []   # custom JSON, not CycloneDX
-
-    def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
-        if output_path is None:
-            return {}
-        return self._discovery_scores(self.detections_from_output_dir(self.tool_output_dir))

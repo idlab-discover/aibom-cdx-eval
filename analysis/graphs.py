@@ -1,22 +1,23 @@
 """
 analysis/graphs.py — generate publication-ready figures from aggregated results.
 
-Reads results/aggregated/data/<run-id>/<run-id>_summary.json and produces PDF + PNG
-figures under results/aggregated/figures/<run-id>/.
+Reads <root>/aggregated/data/<run-id>/<run-id>_summary.json (and, for the T1
+boxplots, the run's metrics.json files under <root>/runs/<run-id>/) and writes PDF +
+PNG figures to <root>/aggregated/figures/<run-id>/ (root = --results-dir).
 
-Figures (input type = what the tool was given):
-  fig1_t1_throughput_boxplot         HF model-ID input   T1 throughput distribution
-  fig2_t1_boxplot                    HF model-ID input   T1 generation-time distribution
-  fig3_t2_reliability                HF model-ID input   T2 share of models that succeed / fail
-  fig4a_t3_discovery                 Source-code scan    T3 precision / recall / F1, all targets
-  fig4b_t3_recall_by_scope           Source-code scan    T3 recall per target scope
+Figures (run type = what the tool was given):
+  fig1_t1_throughput_boxplot         model ID      T1 throughput distribution
+  fig2_t1_boxplot                    model ID      T1 generation-time distribution
+  fig3_t2_reliability                model ID      T2 share of models that succeed / fail
+  fig4a_t3_discovery                 source scan   T3 precision / recall / F1, all targets
+  fig4b_t3_recall_by_scope           source scan   T3 recall per target scope
   fig5a_t4_conformance_model_id / _source_scan      CycloneDX conformance pass rate
   fig5b_t4_completeness_model_id / _source_scan     full-BOM completeness and breadth
   fig5c_t4_model_completeness_model_id / _source_scan   model-component completeness
 
 Style rules (all figures)
   * No plot titles — the LaTeX caption provides them.  The only title is a short
-    subtitle naming the input type (and, for T3, the scope).
+    subtitle naming the run type (and, for T3, the scope).
   * One visual encoding everywhere: colour = tool, shade (dark → light) = metric,
     diagonal hatch = CycloneDX v1.7 (solid = v1.6).  Hatching means nothing else.
   * One shared legend row below the plot in black/white/grey explains the shades and
@@ -25,7 +26,6 @@ Style rules (all figures)
 
 Usage:
     uv run eval aggregate --run-id <run-id>
-    uv run python -m analysis.graphs --run-id <run-id>
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ from __future__ import annotations
 import glob
 import json
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -45,20 +44,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from constants import (
-    AGGREGATED_DIR,
     EVAL_ROOT,
     EC_CRASH,
     EC_GATED_OR_UNAUTHORIZED,
-    FIGURES_DIR,
-    INPUT_LABEL_MODEL_ID,
-    INPUT_LABEL_SCAN,
-    INPUT_TYPE_LABELS,
-    RESULTS_DIR,
-    SUBTASK_T1,
-    SUBTASK_T2,
-    SUBTASK_T3,
-    SUBTASK_T4_MODELID,
-    SUBTASK_T4_SCAN,
+    K_NORMALIZED_THROUGHPUT,
+    TASK_T1,
+    TASK_T2,
+    TASK_T3,
+    RUN_MODEL_ID,
+    RUN_SOURCE_SCAN,
+    RUN_TYPE_LABELS,
+    T4_RUN_TYPE,
     TOOL_LABELS,
     TOOL_ORDER,
 )
@@ -102,18 +98,9 @@ plt.rcParams["hatch.linewidth"] = 1.1
 _INK = "#333333"
 _SUBTITLE_INK = "#555555"
 
-# ── Tool groups ─────────────────────────────────────────────────────────────
+# Every figure shows the tools that have data for its task in the summary,
+# in TOOL_ORDER.
 
-T1_TOOLS      = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
-T2_TOOLS      = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
-T4_MODELID_TOOLS = ["aibomgen-cli", "aibom-generator", "ALOHA", "lab700xorg-aisbom"]
-T4_SCAN_TOOLS    = ["aibomgen-cli", "akumar-aibom", "trusera-aibom", "cdxgen-aibom", "hts-aibom"]
-
-# (summary sub-task, tools, file-name suffix) for figures drawn once per input type.
-_T4_INPUTS = [
-    (SUBTASK_T4_MODELID, T4_MODELID_TOOLS, "model_id"),
-    (SUBTASK_T4_SCAN,    T4_SCAN_TOOLS,    "source_scan"),
-]
 
 
 def shade(tool: str, level: str) -> tuple[float, float, float]:
@@ -125,28 +112,22 @@ def shade(tool: str, level: str) -> tuple[float, float, float]:
 
 
 # ================================================================== #
-# CLI entry point                                                       #
+# Entry point                                                           #
 # ================================================================== #
 
-@click.command()
-@click.option("--run-id", required=True, help="Run ID to generate figures for.")
-def main(run_id: str) -> None:
-    """Generate publication-ready figures for a completed aggregated run."""
-    summary_path = AGGREGATED_DIR / "data" / run_id / f"{run_id}_summary.json"
-    if not summary_path.exists():
-        click.echo(f"Summary not found: {summary_path}", err=True)
-        sys.exit(1)
+def make_figures(run_id: str, results_root: Path) -> None:
+    """Generate the figures of an aggregated run (see the module docstring)."""
+    summary_path = results_root / "aggregated" / "data" / run_id / f"{run_id}_summary.json"
+    S: dict[str, Any] = json.loads(summary_path.read_text())
 
-    with open(summary_path) as f:
-        S: dict[str, Any] = json.load(f)
-
-    out_dir = FIGURES_DIR / run_id
+    out_dir = results_root / "aggregated" / "figures" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     plt.rcParams.update(_RC)
 
-    _fig1_t1_throughput_boxplot(S, run_id, out_dir)
-    _fig2_t1_boxplot(S, run_id, out_dir)
+    run_dir = results_root / "runs" / run_id
+    _fig1_t1_throughput_boxplot(S, run_dir, out_dir)
+    _fig2_t1_boxplot(S, run_dir, out_dir)
     _fig3_t2_reliability(S, out_dir)
     _fig4_t3_discovery(S, out_dir)
     _fig5a_t4_conformance(S, out_dir)
@@ -244,8 +225,8 @@ def _shared_legend(fig: plt.Figure, ax: Any, series: list[Series]) -> None:
         text.set_color(_INK)
 
 
-def _metric_entry(S: dict, tool: str, subtask: str, key: str) -> dict | float | None:
-    return (S.get(f"{tool}::{subtask}") or {}).get("metrics", {}).get(key)
+def _metric_entry(S: dict, tool: str, task: str, key: str) -> dict | float | None:
+    return (S.get(f"{tool}::{task}") or {}).get("metrics", {}).get(key)
 
 
 def _entry_mean(entry: Any) -> float | None:
@@ -273,7 +254,7 @@ def _grouped_bar_figure(
     S: dict,
     out: Path,
     stem: str,
-    subtask: str,
+    task: str,
     tools: list[str],
     series: list[Series],
     ylabel: str,
@@ -289,7 +270,7 @@ def _grouped_bar_figure(
     given) writes each bar's value on top of it.  ``err`` on a series draws
     ±SD ("std") or 95 % CI ("ci") error bars.
     """
-    tools = [t for t in tools if _metric_entry(S, t, subtask, series[0].key) is not None]
+    tools = [t for t in tools if _metric_entry(S, t, task, series[0].key) is not None]
     if not tools:
         click.echo(f"  Skipped {stem} (no data)")
         return
@@ -302,7 +283,7 @@ def _grouped_bar_figure(
     means: dict[str, list[float]] = {}
     tops: list[float] = []
     for s, off in zip(series, offsets):
-        entries = [_metric_entry(S, t, subtask, s.key) for t in tools]
+        entries = [_metric_entry(S, t, task, s.key) for t in tools]
         vals = [_entry_mean(e) or 0.0 for e in entries]
         errs = [_entry_err(e, s.err) for e in entries]
         lo = np.array([e[0] for e in errs])
@@ -340,31 +321,30 @@ def _grouped_bar_figure(
 
 def _load_t1_samples(
     tool: str,
-    run_ids: list[str],
+    run_dir: Path,
     extract: Callable[[dict], Any],
 ) -> tuple[list[float], set[int]]:
-    """Collect one value per successful T1_T2 run, plus the repeat indices seen."""
+    """Collect one value per successful model-ID run, plus the repeat indices seen."""
     values: list[float] = []
     repeat_ids: set[int] = set()
-    for rid in run_ids:
-        pattern = str(RESULTS_DIR / rid / tool / "T1_T2" / "**" / "metrics.json")
-        for path in glob.glob(pattern, recursive=True):
-            m_repeat = re.fullmatch(r"r(\d+)", Path(path).parent.name)
-            if m_repeat:
-                repeat_ids.add(int(m_repeat.group(1)))
-            with open(path) as fh:
-                m = json.load(fh)
-            if m.get("task") != "T1_T2" or not m.get("success"):
-                continue
-            val = extract(m)
-            if isinstance(val, (int, float)):
-                values.append(float(val))
+    pattern = str(run_dir / tool / RUN_MODEL_ID / "**" / "metrics.json")
+    for path in glob.glob(pattern, recursive=True):
+        m_repeat = re.fullmatch(r"r(\d+)", Path(path).parent.name)
+        if m_repeat:
+            repeat_ids.add(int(m_repeat.group(1)))
+        with open(path) as fh:
+            m = json.load(fh)
+        if m.get("run_type") != RUN_MODEL_ID or not m.get("success"):
+            continue
+        val = extract(m)
+        if isinstance(val, (int, float)):
+            values.append(float(val))
     return sorted(values), repeat_ids
 
 
 def _t1_boxplot(
     S: dict,
-    run_ids: list[str],
+    run_dir: Path,
     out: Path,
     extract: Callable[[dict], Any],
     ylabel: str,
@@ -374,9 +354,9 @@ def _t1_boxplot(
     legend_loc: str = "upper left",
 ) -> None:
     """Render a log-scale per-tool boxplot of one per-run T1 quantity."""
-    tools = [t for t in T1_TOOLS if f"{t}::{SUBTASK_T1}" in S]
+    tools = [t for t in TOOL_ORDER if f"{t}::{TASK_T1}" in S]
 
-    tool_stats = {t: _load_t1_samples(t, run_ids, extract) for t in tools}
+    tool_stats = {t: _load_t1_samples(t, run_dir, extract) for t in tools}
     data = {t: stats[0] for t, stats in tool_stats.items()}
     tools = [t for t in tools if data.get(t)]
     if not tools:
@@ -442,7 +422,7 @@ def _t1_boxplot(
     ax.set_ylabel(ylabel)
     ax.set_xticklabels(box_labels, fontsize=7.5)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:g}{unit}"))
-    _subtitle(ax, INPUT_LABEL_MODEL_ID)
+    _subtitle(ax, RUN_TYPE_LABELS[RUN_MODEL_ID])
 
     med_patch = plt.Line2D([0], [0], color="black", linewidth=1.2, label="Median")
     mean_patch = plt.Line2D([0], [0], marker="x", color="w", markerfacecolor="black",
@@ -457,11 +437,11 @@ def _t1_boxplot(
     click.echo(f"  Saved {stem}.pdf/.png")
 
 
-def _fig1_t1_throughput_boxplot(S: dict, run_id: str, out: Path) -> None:
+def _fig1_t1_throughput_boxplot(S: dict, run_dir: Path, out: Path) -> None:
     """Figure 1 — T1: normalised-throughput distribution (boxplot)."""
     _t1_boxplot(
-        S, [run_id], out,
-        extract=lambda m: (m.get("scores") or {}).get("normalized_throughput"),
+        S, run_dir, out,
+        extract=lambda m: (m.get("scores") or {}).get(K_NORMALIZED_THROUGHPUT),
         ylabel="Throughput (fields / s, log scale)",
         unit=" f/s",
         value_fmt=".1f",
@@ -470,10 +450,10 @@ def _fig1_t1_throughput_boxplot(S: dict, run_id: str, out: Path) -> None:
     )
 
 
-def _fig2_t1_boxplot(S: dict, run_id: str, out: Path) -> None:
+def _fig2_t1_boxplot(S: dict, run_dir: Path, out: Path) -> None:
     """Figure 2 — T1: generation-time distribution (boxplot)."""
     _t1_boxplot(
-        S, [run_id], out,
+        S, run_dir, out,
         extract=lambda m: m.get("duration_seconds"),
         ylabel="Generation time (s, log scale)",
         unit="s",
@@ -492,7 +472,7 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
     A model counts as failed only if ALL its repeats failed.  Failure classes are
     stacked above the success bar in neutral greys (solid, no hatch).
     """
-    tools = [t for t in T2_TOOLS if f"{t}::{SUBTASK_T2}" in S]
+    tools = [t for t in TOOL_ORDER if f"{t}::{TASK_T2}" in S]
     if not tools:
         click.echo("  Skipped fig3_t2_reliability (no data)")
         return
@@ -500,10 +480,10 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
     grey = {"gated": "#9a9a9a", "crash": "#4d4d4d", "other": "#d2d2d2"}
 
     def _frac(tool: str, ec: str) -> float:
-        e = S[f"{tool}::{SUBTASK_T2}"]
+        e = S[f"{tool}::{TASK_T2}"]
         return e.get("error_breakdown_models", {}).get(ec, 0) / max(e.get("n_models", 1), 1)
 
-    success = [S[f"{t}::{SUBTASK_T2}"]["model_success_rate"] for t in tools]
+    success = [S[f"{t}::{TASK_T2}"]["model_success_rate"] for t in tools]
     gated = [_frac(t, EC_GATED_OR_UNAUTHORIZED) for t in tools]
     crash = [_frac(t, EC_CRASH) for t in tools]
     other = [max(1 - s - g - c, 0.0) for s, g, c in zip(success, gated, crash)]
@@ -520,13 +500,13 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
         ax.text(i, v / 2, f"{v * 100:.0f}%", ha="center", va="center",
                 color="white", fontsize=9, fontweight="bold")
 
-    n_models = [S[f"{t}::{SUBTASK_T2}"].get("n_models", 0) for t in tools]
+    n_models = [S[f"{t}::{TASK_T2}"].get("n_models", 0) for t in tools]
     ax.set_xticks(x)
     ax.set_xticklabels([f"{TOOL_LABELS[t]}\n(N={n} models)" for t, n in zip(tools, n_models)],
                        rotation=18, ha="right", fontsize=8)
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Share of models")
-    _subtitle(ax, INPUT_LABEL_MODEL_ID)
+    _subtitle(ax, RUN_TYPE_LABELS[RUN_MODEL_ID])
     fig.tight_layout()
     ax.legend(
         handles=[
@@ -547,11 +527,11 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
 # ================================================================== #
 
 _T3_SCOPES = [
-    # (summary key suffix, x-axis label)
-    ("_scope_python",    "Python"),
-    ("_scope_mixed",     "Mixed"),
-    ("_scope_config",    "Config files"),
-    ("_scope_cloud_api", "Cloud API"),
+    # (scope bucket, x-axis label)
+    ("python",    "Python"),
+    ("mixed",     "Mixed"),
+    ("config",    "Config files"),
+    ("cloud_api", "Cloud API"),
 ]
 
 
@@ -561,23 +541,21 @@ def _fig4_t3_discovery(S: dict, out: Path) -> None:
     Bars are micro (pooled over targets) scores; whiskers are the 95 % bootstrap
     CI over targets.  Shade = metric (dark F1, mid precision, light recall).
     """
-    tools = [t for t in TOOL_ORDER if f"{t}::{SUBTASK_T3}" in S]
+    tools = [t for t in TOOL_ORDER if f"{t}::{TASK_T3}" in S]
     series = [
         Series("f1",        "F1",        "dark",  err="ci"),
         Series("precision", "Precision", "mid",   err="ci"),
         Series("recall",    "Recall",    "light", err="ci"),
     ]
     _grouped_bar_figure(
-        S, out, "fig4a_t3_discovery", SUBTASK_T3, tools, series,
-        ylabel="Score", subtitle=f"{INPUT_LABEL_SCAN} — all targets",
+        S, out, "fig4a_t3_discovery", TASK_T3, tools, series,
+        ylabel="Score", subtitle=f"{RUN_TYPE_LABELS[RUN_SOURCE_SCAN]} — all targets",
         figsize=(5.0, 3.6), ylim=(0, 1.05),
     )
     _fig4b_t3_recall_by_scope(S, out, tools)
 
 
 _CLAIMS_PATH = EVAL_ROOT / "benchmarks" / "tool-claims.yaml"
-_SCOPE_KEYS = {"_scope_python": "python", "_scope_mixed": "mixed",
-               "_scope_config": "config", "_scope_cloud_api": "cloud_api"}
 # Claim marker under each bar: what the tool's own documentation says it supports.
 _CLAIM_STYLE = {
     "yes":     dict(marker="o", markersize=5.5, markerfacecolor="black", markeredgecolor="black"),
@@ -628,13 +606,14 @@ def _fig4b_t3_recall_by_scope(S: dict, out: Path, tools: list[str]) -> None:
     width = 0.8 / len(tools)
     marker_y = -0.07
     for i, tool in enumerate(tools):
-        vals = [_entry_mean(_metric_entry(S, tool, SUBTASK_T3, f"recall{k}")) or 0.0 for k, _ in _T3_SCOPES]
+        by_scope = _metric_entry(S, tool, TASK_T3, "by_scope") or {}
+        vals = [_entry_mean((by_scope.get(k) or {}).get("recall")) or 0.0 for k, _ in _T3_SCOPES]
         xs = x + (i - (len(tools) - 1) / 2) * width
         ax.bar(xs, vals, width=width, color=PALETTE[tool], edgecolor="white", linewidth=0.6,
                label=TOOL_LABELS[tool])
         _label_bars(ax, xs, vals, lambda v: f"{v:.2f}", pad=0.012, fontsize=6.5, rotation=90)
         for xi, (key, _) in zip(xs, _T3_SCOPES):
-            claim = claims.get(tool, {}).get(_SCOPE_KEYS[key])
+            claim = claims.get(tool, {}).get(key)
             if claim in _CLAIM_STYLE:
                 ax.plot([xi], [marker_y], linestyle="none", clip_on=False, **_CLAIM_STYLE[claim])
     ax.axhline(0, color=_INK, linewidth=0.8)
@@ -646,7 +625,7 @@ def _fig4b_t3_recall_by_scope(S: dict, out: Path, tools: list[str]) -> None:
     ax.set_ylim(-0.12, 1.12)
     ax.set_yticks(np.linspace(0, 1, 6))
     ax.spines["left"].set_bounds(0, 1.0)
-    _subtitle(ax, f"{INPUT_LABEL_SCAN} — recall by target scope")
+    _subtitle(ax, f"{RUN_TYPE_LABELS[RUN_SOURCE_SCAN]} — recall by target scope")
     fig.tight_layout()
 
     tool_handles = [mpatches.Patch(facecolor=PALETTE[t], edgecolor="white", label=TOOL_LABELS[t]) for t in tools]
@@ -675,14 +654,15 @@ def _fig4b_t3_recall_by_scope(S: dict, out: Path, tools: list[str]) -> None:
 
 def _fig5a_t4_conformance(S: dict, out: Path) -> None:
     """Figure 5a — T4: CycloneDX conformance pass rate (v1.6 solid, v1.7 hatched)."""
-    for subtask, tools, suffix in _T4_INPUTS:
+    for task, run_type in T4_RUN_TYPE.items():
+        suffix = run_type.replace("-", "_")          # model_id / source_scan
         _grouped_bar_figure(
-            S, out, f"fig5a_t4_conformance_{suffix}", subtask, tools,
+            S, out, f"fig5a_t4_conformance_{suffix}", task, TOOL_ORDER,
             series=[
                 Series("cdx_conformance_pass_rate_v16", "v1.6", "dark"),
                 Series("cdx_conformance_pass_rate_v17", "v1.7", "dark", v17=True),
             ],
-            ylabel="Conformance pass rate", subtitle=INPUT_TYPE_LABELS[subtask],
+            ylabel="Conformance pass rate", subtitle=RUN_TYPE_LABELS[run_type],
             figsize=(5.4, 3.8), fmt=lambda v: f"{v * 100:.1f}%".replace(".0%", "%"),
             ylim=(0, 1.12),
         )
@@ -691,34 +671,33 @@ def _fig5a_t4_conformance(S: dict, out: Path) -> None:
 def _fig5b_t4_completeness(S: dict, out: Path) -> None:
     """Figure 5b — T4: full-BOM completeness (dark, ±1 SD across inputs) and
     breadth (light).  Hatched = CycloneDX v1.7."""
-    for subtask, tools, suffix in _T4_INPUTS:
+    for task, run_type in T4_RUN_TYPE.items():
+        suffix = run_type.replace("-", "_")          # model_id / source_scan
         _grouped_bar_figure(
-            S, out, f"fig5b_t4_completeness_{suffix}", subtask, tools,
+            S, out, f"fig5b_t4_completeness_{suffix}", task, TOOL_ORDER,
             series=[
                 Series("cdx_completeness_pct_v16", "completeness v1.6", "dark", err="std"),
                 Series("cdx_completeness_pct_v17", "completeness v1.7", "dark", v17=True, err="std"),
                 Series("cdx_breadth_pct_v16",      "breadth v1.6",      "light"),
                 Series("cdx_breadth_pct_v17",      "breadth v1.7",      "light", v17=True),
             ],
-            ylabel="Schema field coverage (%)", subtitle=INPUT_TYPE_LABELS[subtask],
+            ylabel="Schema field coverage (%)", subtitle=RUN_TYPE_LABELS[run_type],
             figsize=(6.0, 3.8), fmt=lambda v: f"{v:.2f}",
         )
 
 
 def _fig5c_t4_model_completeness(S: dict, out: Path) -> None:
     """Figure 5c — T4: model-component completeness (±1 SD across inputs)."""
-    for subtask, tools, suffix in _T4_INPUTS:
+    for task, run_type in T4_RUN_TYPE.items():
+        suffix = run_type.replace("-", "_")          # model_id / source_scan
         _grouped_bar_figure(
-            S, out, f"fig5c_t4_model_completeness_{suffix}", subtask, tools,
+            S, out, f"fig5c_t4_model_completeness_{suffix}", task, TOOL_ORDER,
             series=[
                 Series("cdx_model_completeness_pct_v16", "model completeness v1.6", "dark", err="std"),
                 Series("cdx_model_completeness_pct_v17", "model completeness v1.7", "dark",
                        v17=True, err="std"),
             ],
-            ylabel="Model-component field coverage (%)", subtitle=INPUT_TYPE_LABELS[subtask],
+            ylabel="Model-component field coverage (%)", subtitle=RUN_TYPE_LABELS[run_type],
             figsize=(5.4, 3.8), fmt=lambda v: f"{v:.2f}",
         )
 
-
-if __name__ == "__main__":
-    main()

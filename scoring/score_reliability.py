@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 from constants import (
     EC_CRASH,
@@ -33,7 +32,6 @@ from constants import (
     EC_SUCCESS,
     EC_TIMEOUT,
     EC_GATED_OR_UNAUTHORIZED,
-    K_ERROR_CLASS,
 )
 
 # ── regex patterns for log heuristics ──────────────────────────────────────
@@ -90,7 +88,7 @@ def classify_error(
         try:
             raw = output_path.read_bytes()
             if len(raw) == 0:
-                return "parse_error"
+                return EC_PARSE_ERROR
             json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
             return EC_PARSE_ERROR
@@ -111,23 +109,3 @@ def classify_error(
 
     return EC_CRASH
 
-
-# ── public scorer (called once per run) ──────────────────────────────────
-
-
-def score_reliability(
-    exit_code: int,
-    stderr: str,
-    output_path: Path | None,
-    success: bool,
-) -> dict[str, Any]:
-    """Return reliability scores for a single run.
-
-    Returns:
-        {
-            "error_class": str   # one of the categories above
-        }
-    """
-    return {
-        K_ERROR_CLASS: classify_error(exit_code, stderr, output_path, success),
-    }

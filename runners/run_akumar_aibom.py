@@ -1,23 +1,22 @@
 """
 Runner for akumar-aibom.
 
-Task: T3_T4 — `uv run aibom generate <source_dir> -o <output_file> --profile ai-bom-like`
-Output: akumar's proprietary AIBOM JSON.  A CycloneDX export is produced
-        inline (via `aibom export --format cyclonedx-json`) for T4 scoring.
+Run type: source-scan — `uv run aibom generate <source_dir> -o <output_file> --profile ai-bom-like`
+Output: akumar's proprietary AIBOM JSON.  After a successful run, after_success()
+        exports it to CycloneDX (`aibom export --format cyclonedx-json`) for T4 scoring.
 
 cleanup_side_effects: removes any AI_BOM.json, AIBOM.json etc. left in tool working dir.
 """
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from constants import EVAL_ROOT
 from runners.base_runner import BaseRunner
-from scoring.extract import extract_model_ids_akumar, model_claims_akumar
-from scoring.score_cdx import score_cdx_paths
+from scoring.extract import model_claims_akumar
 
 
 def _export_cyclonedx(native_path: Path, entry: list[str], working_dir: Path) -> Path | None:
@@ -85,7 +84,7 @@ class AkumarAibomRunner(BaseRunner):
         self, input_spec: str, output_dir: Path, run_env: dict
     ) -> list[str]:
         output_file = output_dir / "AI_BOM.json"
-        entry = self.tool_config.get("entry", ["uv", "run", "aibom"])
+        entry = self.tool_config["entry"]
         return entry + ["generate", input_spec, "-o", str(output_file), "--profile", "ai-bom-like"]
 
     def locate_output(self, output_dir: Path) -> Path | None:
@@ -93,12 +92,16 @@ class AkumarAibomRunner(BaseRunner):
         return p if p.exists() else None
 
     @classmethod
-    def unidentified_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
-        return model_claims_akumar(tool_output_dir / "AI_BOM.json")[1]
+    def claims_from_output_dir(cls, tool_output_dir: Path) -> tuple[list[str], list[str]]:
+        # T3 discovery reads akumar's native format, not the CycloneDX export
+        return model_claims_akumar(tool_output_dir / "AI_BOM.json")
 
-    @classmethod
-    def detections_from_output_dir(cls, tool_output_dir: Path) -> list[str]:
-        return extract_model_ids_akumar(tool_output_dir / "AI_BOM.json")
+    def after_success(self, tool_output_dir: Path) -> None:
+        """T4 scores the CycloneDX export of the native output."""
+        native = tool_output_dir / "AI_BOM.json"
+        if native.exists():
+            _export_cyclonedx(native, self.tool_config["entry"],
+                              self.working_dir())
 
     @classmethod
     def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
@@ -124,24 +127,14 @@ class AkumarAibomRunner(BaseRunner):
         # Also remove any auto-created output dirs akumar makes
         for candidate in tool_dir.iterdir():
             if candidate.is_dir() and candidate.name.startswith("aibom_"):
-                try:
-                    import shutil
-                    shutil.rmtree(candidate, ignore_errors=True)
-                except Exception:
-                    pass
+                shutil.rmtree(candidate, ignore_errors=True)
 
         # Remove the .aibom/ folder that akumar writes into the scanned target dir
         if input_spec:
             target_path = Path(input_spec)
             if not target_path.is_absolute():
                 target_path = EVAL_ROOT / target_path
-            aibom_dir = target_path / ".aibom"
-            if aibom_dir.exists() and aibom_dir.is_dir():
-                try:
-                    import shutil
-                    shutil.rmtree(aibom_dir, ignore_errors=True)
-                except Exception:
-                    pass
+            shutil.rmtree(target_path / ".aibom", ignore_errors=True)
 
     def post_run(self) -> None:
         """Undo the pyproject.toml patch (and restore the tracked sample AI_BOM.json) so the
@@ -150,16 +143,3 @@ class AkumarAibomRunner(BaseRunner):
             ["git", "-C", str(self.working_dir()), "checkout", "--", "pyproject.toml", "AI_BOM.json"],
             capture_output=True, timeout=30,
         )
-
-    def score(self, output_path: Path | None, input_spec: str) -> dict[str, Any]:
-        if output_path is None:
-            return {}
-
-        # T3 discovery from akumar's native format (not CycloneDX)
-        scores = self._discovery_scores(self.detections_from_output_dir(self.tool_output_dir))
-
-        # T4 CycloneDX quality: export to CycloneDX first, then score
-        entry = self.tool_config.get("entry", ["uv", "run", "aibom"])
-        _export_cyclonedx(output_path, entry, self.working_dir())
-        scores.update(score_cdx_paths(self.cdx_output_paths(self.tool_output_dir)))
-        return scores

@@ -32,13 +32,13 @@ Path notation:  "metadata.component.name", "components[].purl", etc.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from pathlib import Path
 from typing import Any
 
 from constants import (
-    EVAL_ROOT,
     K_CDX_COMPLETENESS_DETAIL_V16,
     K_CDX_COMPLETENESS_DETAIL_V17,
     K_CDX_COMPLETENESS_V16,
@@ -208,11 +208,6 @@ def _present(node: Any, parts: list[str], refs: dict[str, dict]) -> bool:
     return _present(node.get(part), rest, refs)
 
 
-def _value_at_path(bom: Any, path: str, refs: dict[str, dict] | None = None) -> bool:
-    """Return True if `path` resolves to a filled value in `bom`."""
-    return _present(bom, path.split("."), refs or {})
-
-
 def _bom_ref_index(bom: Any) -> dict[str, dict]:
     if not isinstance(bom, dict):
         return {}
@@ -269,29 +264,16 @@ def merge_completeness_detail(detail: dict[str, bool]) -> dict[str, bool]:
 
 # ── schema-path cache ──────────────────────────────────────────────────────
 
-_paths_cache: dict[str, list[str]] = {}
-
-
+@functools.cache
 def _get_schema_paths(version_key: str) -> list[str]:
-    if version_key in _paths_cache:
-        return _paths_cache[version_key]
-
     schema_file = _SCHEMA_PATHS.get(version_key)
     if schema_file is None or not schema_file.exists():
-        _paths_cache[version_key] = []
         return []
-
     try:
         root = json.loads(schema_file.read_text())
     except Exception:
-        _paths_cache[version_key] = []
         return []
-
-    paths = _enumerate_paths(root, root)
-    # Deduplicate and sort
-    paths = sorted(set(paths))
-    _paths_cache[version_key] = paths
-    return paths
+    return sorted(set(_enumerate_paths(root, root)))
 
 
 # ── public scorer ──────────────────────────────────────────────────────────
@@ -349,7 +331,7 @@ def score_cdx_completeness(output_path: Path) -> dict[str, Any]:
         if not paths:
             continue
 
-        raw = {p: _value_at_path(bom, p, refs) for p in paths}
+        raw = {p: _present(bom, p.split("."), refs) for p in paths}
         detail = merge_completeness_detail(raw)
         result[pct_key] = _pct(detail.values())
         result[detail_key] = detail
@@ -358,7 +340,7 @@ def score_cdx_completeness(output_path: Path) -> dict[str, Any]:
         if model is None:
             result[model_key] = 0.0
         else:
-            result[model_key] = _pct(_value_at_path(model, p, refs) for p in comp_paths)
+            result[model_key] = _pct(_present(model, p.split("."), refs) for p in comp_paths)
 
     return result
 
