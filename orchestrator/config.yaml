@@ -23,11 +23,12 @@ run:
   retry_delay_seconds: 30      # doubles per retry: 30, 60, 120, 240, 480 s
   timeout_seconds: 1800
   retry_on_timeout: false      # a timed-out job is recorded as a failure, not retried
-  # Hub API limit: 1000 requests / 5 min per token (500 per IP without one, e.g. ALOHA).
-  # Before every model-id job (and before a retry) the runner reads the remaining budget from
-  # the Hub's `ratelimit` header and waits for the window reset if fewer than this remain.
-  # 200 covers the heaviest job seen (OWASP aibom-generator: up to 182 requests).
-  # ponytail: the probe costs 1 request/job (~36 per window at eval-004's pace).
+  # Hub rate limits (fixed 5-min windows): api 1000 per token / 500 per IP without one (ALOHA),
+  # resolvers 5000.  Before every model-id job (and before a retry) the runner reads all four
+  # counters from the Hub's `ratelimit` header and waits for the window reset if any has fewer
+  # than this left; it reads them again after the job and stores the difference as the job's
+  # `hub_requests`.  200 covers the heaviest job seen (OWASP aibom-generator: up to 182 requests).
+  # ponytail: the probes cost 8 requests/job (~2 per bucket), a few % of each budget.
   hub_min_remaining: 200
   default_dataset_limit: 100
   baseline_samples: 5          # no-op invocations timed per tool to estimate process start-up cost

@@ -1,29 +1,24 @@
-"""
-validate_ground_truth.py — check every T3 ground-truth file against its target.
+"""T3 ground truth vs its targets (one test per target).
 
-Checks (exit code 1 if any fails):
+Checks:
   1. Schema: v2, unique ids, every entry names a source file that exists.
   2. Every id / alias literally occurs in the target's files (in the named file).
   3. Every HF-style ``org/name`` literal found in the target's files is
      accounted for: in ``models``, ``neutral`` or ``not_models`` (or an alias).
      An unaccounted literal means the ground truth is incomplete.
 
-Usage:
-    uv run python scripts/validate_ground_truth.py            # all targets
-    uv run python scripts/validate_ground_truth.py target-05-mixed
+Run only these:  uv run pytest tests -k ground_truth
 """
 
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
-EVAL_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(EVAL_ROOT))
+import pytest
 
-from constants import GT_DIR  # noqa: E402
-from scoring.ground_truth import canon, load_ground_truth  # noqa: E402
+from constants import EVAL_ROOT, GT_DIR
+from scoring.ground_truth import canon, load_ground_truth
 
 TARGETS_DIR = EVAL_ROOT / "targets"
 SKIP_DIRS = {".aibom", "__pycache__", ".git", "node_modules"}
@@ -94,22 +89,6 @@ def validate(gt_path: Path) -> list[str]:
     return errors
 
 
-def main(argv: list[str]) -> int:
-    paths = (
-        [GT_DIR / f"{a}.json" for a in argv]
-        if argv else sorted(GT_DIR.glob("*.json"))
-    )
-    failed = 0
-    for p in paths:
-        errs = validate(p)
-        status = "OK  " if not errs else "FAIL"
-        print(f"{status} {p.stem}")
-        for e in errs:
-            print(f"     - {e}")
-        failed += bool(errs)
-    print(f"\n{len(paths) - failed}/{len(paths)} ground-truth files valid")
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+@pytest.mark.parametrize("gt_path", sorted(GT_DIR.glob("*.json")), ids=lambda p: p.stem)
+def test_ground_truth_matches_target(gt_path: Path) -> None:
+    assert validate(gt_path) == []

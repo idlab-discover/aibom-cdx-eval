@@ -5,6 +5,7 @@ Subcommands:
   run        Run all jobs on the current machine (sequential).
   status     Show status of the latest run (or a specific run via --run-id).
   aggregate  Aggregate metrics for one run and generate figures.
+  resolve-aliases  Add Hub redirect targets to the T3 ground truth as aliases.
 
 Every command takes --results-dir, the results root (default results/):
 runs live in <root>/runs/<run-id>/, aggregated output in <root>/aggregated/.
@@ -26,6 +27,8 @@ import statistics
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from itertools import groupby
 from pathlib import Path
 from typing import Any
@@ -38,6 +41,7 @@ from rich.table import Table
 from constants import (
     CONFIG_PATH,
     EVAL_ROOT,
+    GT_DIR,
     JOB_INDEX_FILENAME,
     METRICS_FILENAME,
     RESULTS_ROOT,
@@ -191,6 +195,49 @@ def aggregate(run_id: str, results_dir: Path) -> None:
     summary_path = aggregate_run(run_id, results_dir)
     make_figures(run_id, results_dir)
     console.print(f"[green]Aggregated:[/green] {summary_path}")
+
+
+@cli.command("resolve-aliases")
+@click.option("--dry-run", is_flag=True, help="Only print the aliases that would be added.")
+def resolve_aliases(dry_run: bool) -> None:
+    """Add Hub redirect targets to the T3 ground truth as aliases.
+
+    The Hub renames repos (``cross-encoder/ms-marco-MiniLM-L-6-v2`` now redirects to
+    ``cross-encoder/ms-marco-MiniLM-L6-v2``).  A tool that resolves such a redirect
+    reports the canonical id; without an alias it would be scored as one false
+    positive AND one miss.  Asks the Hub for the canonical id of every counted /
+    neutral model and records it as an alias when it differs.  Idempotent; ids the
+    Hub does not know (cloud models such as ``gpt-4o``) are skipped."""
+    token = os.environ.get("HF_TOKEN")
+    added = 0
+    for path in sorted(GT_DIR.glob("*.json")):
+        data = json.loads(path.read_text())
+        changed = False
+        for section in ("models", "neutral"):
+            for entry in data.get(section, []):
+                known = {entry["id"].lower(), *(a.lower() for a in entry.get("aliases", []))}
+                canon = _canonical_hub_id(entry["id"], token)
+                if canon and canon.lower() not in known:
+                    click.echo(f"{path.stem}: {entry['id']}  ->  {canon}")
+                    entry.setdefault("aliases", []).append(canon)
+                    changed, added = True, added + 1
+        if changed and not dry_run:
+            path.write_text(json.dumps(data, indent=2) + "\n")
+    click.echo(f"\n{added} alias(es) {'found' if dry_run else 'added'}")
+
+
+def _canonical_hub_id(model_id: str, token: str | None) -> str | None:
+    """Canonical Hub id for ``model_id`` (follows redirects), or None if unknown."""
+    if "/" not in model_id:
+        return None
+    req = urllib.request.Request(f"https://huggingface.co/api/models/{model_id}")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode()).get("id")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
 
 
 def _write_run_meta(

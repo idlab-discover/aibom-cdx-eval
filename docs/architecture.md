@@ -109,7 +109,7 @@ aibomgen-cli-eval/
 │   ├── score_performance.py              T1 field count and throughput
 │   ├── score_reliability.py              T2 error classification
 │   ├── score_cdx_conformance.py          T4 schema validation (v1.6, v1.7)
-│   ├── score_cdx_completeness.py         T4 field coverage (full BOM, model component)
+│   ├── score_cdx_completeness.py         T4 field coverage (full BOM, AI-relevant subset)
 │   ├── score_cdx.py                      T4 over every BOM of a run
 │   └── aggregate.py                      per-run summary, tables, report
 ├── analysis/graphs.py                    figures
@@ -119,9 +119,7 @@ aibomgen-cli-eval/
 │   └── tool-claims.yaml                  what each tool's docs claim per T3 scope (fig4b markers)
 ├── targets/                              16 synthetic scan targets
 ├── scripts/
-│   ├── setup.sh                          installs every tool at its pinned version
-│   ├── validate_ground_truth.py          ground truth vs the targets
-│   └── resolve_ground_truth_aliases.py   add Hub redirect targets as aliases
+│   └── setup.sh                          installs every tool at its pinned version
 ├── schemas/                              CycloneDX 1.6/1.7 (+ referenced schemas), result schema
 ├── tests/
 └── tools/                                the evaluated tools (one git submodule each) and locks/

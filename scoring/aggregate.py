@@ -47,6 +47,10 @@ from constants import (
     EC_SUCCESS_EMPTY,
     K_CDX_BREADTH_V16,
     K_CDX_BREADTH_V17,
+    K_CDX_AI_BREADTH_V16,
+    K_CDX_AI_BREADTH_V17,
+    K_CDX_AI_COMPLETENESS_V16,
+    K_CDX_AI_COMPLETENESS_V17,
     K_CDX_COMPLETENESS_DETAIL_V16,
     K_CDX_COMPLETENESS_DETAIL_V17,
     K_CDX_COMPLETENESS_V16,
@@ -56,11 +60,11 @@ from constants import (
     K_CDX_CONFORMANCE_VALID_V16,
     K_CDX_CONFORMANCE_VALID_V17,
     K_CDX_MODEL_COMPLETENESS_V16,
-    K_CDX_MODEL_COMPLETENESS_V17,
     K_DETECTED_IDS,
     K_ERROR_CLASS,
     K_FAILURE_RATE,
     K_FIELDS_PRESENT,
+    K_HUB_REQUESTS,
     K_NORMALIZED_THROUGHPUT,
     K_OUTPUT_SIZE_BYTES,
     K_RETRIES_MEAN,
@@ -80,6 +84,7 @@ from constants import (
     TOOL_ORDER,
 )
 from scoring.ground_truth import ground_truth_path, load_ground_truth
+from scoring.score_cdx_completeness import ai_relevant_detail
 from scoring.score_discovery import match_detections, prf
 
 _BOOTSTRAP_B = 2000
@@ -242,6 +247,7 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
         per_model_dur: dict[str, list[float]] = defaultdict(list)
         per_model_thr: dict[str, list[float]] = defaultdict(list)
         per_model_net: dict[str, list[float]] = defaultdict(list)
+        per_model_hub: dict[str, list[float]] = defaultdict(list)
         for r in successes:
             spec = r.get("input_spec", "")
             d = r.get("duration_seconds")
@@ -252,6 +258,9 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
             thr = (r.get("scores") or {}).get(K_NORMALIZED_THROUGHPUT)
             if isinstance(thr, (int, float)):
                 per_model_thr[spec].append(float(thr))
+            hub = (r.get("scores") or {}).get(K_HUB_REQUESTS)
+            if isinstance(hub, (int, float)):
+                per_model_hub[spec].append(float(hub))
 
         summary[f"{tool}::{TASK_T1}"] = {
             "tool":         tool,
@@ -277,6 +286,8 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
                 # Duration minus the tool's no-op start-up cost (run_meta.json baselines).
                 "startup_baseline_seconds":  baseline,
                 "net_duration_stats":        _distribution(per_model_net) if baseline is not None else None,
+                # Hub requests per run, from the rate-limit counters around each job.
+                "hub_requests_stats":        _distribution(per_model_hub),
             },
         }
 
@@ -557,6 +568,16 @@ def _csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def hub_request_medians(summary: dict[str, Any]) -> dict[str, float]:
+    """tool -> median Hub requests per run (over unique models), where measured."""
+    out = {}
+    for t in _tools_for(summary, TASK_T1):
+        stats = summary[f"{t}::{TASK_T1}"]["metrics"].get("hub_requests_stats")
+        if stats:
+            out[t] = stats["median"]
+    return out
+
+
 def _tools_for(summary: dict[str, Any], task: str) -> list[str]:
     return [t for t in TOOL_ORDER if f"{t}::{task}" in summary]
 
@@ -606,14 +627,17 @@ def _t4_rows(summary: dict[str, Any], task: str) -> list[dict[str, Any]]:
         rows.append({
             "tool": tool, "label": TOOL_LABELS.get(tool, tool),
             "runs": e["total_runs"], "scored": e["n_scored"], "no_bom": e["n_no_bom"],
+            "with_model": e.get("n_with_model"),
             "n_inputs": mean(m, K_CDX_COMPLETENESS_V16, "n_inputs"),
             "conformance_v16": m.get(K_CDX_CONFORMANCE_PASS_V16), "conformance_v17": m.get(K_CDX_CONFORMANCE_PASS_V17),
             "completeness_v16": mean(m, K_CDX_COMPLETENESS_V16), "completeness_v16_sd": mean(m, K_CDX_COMPLETENESS_V16, "std"),
             "completeness_v17": mean(m, K_CDX_COMPLETENESS_V17), "completeness_v17_sd": mean(m, K_CDX_COMPLETENESS_V17, "std"),
-            "model_completeness_v16": mean(m, K_CDX_MODEL_COMPLETENESS_V16),
-            "model_completeness_v16_sd": mean(m, K_CDX_MODEL_COMPLETENESS_V16, "std"),
-            "model_completeness_v17": mean(m, K_CDX_MODEL_COMPLETENESS_V17),
-            "model_completeness_v17_sd": mean(m, K_CDX_MODEL_COMPLETENESS_V17, "std"),
+            "ai_completeness_v16": mean(m, K_CDX_AI_COMPLETENESS_V16),
+            "ai_completeness_v16_sd": mean(m, K_CDX_AI_COMPLETENESS_V16, "std"),
+            "ai_completeness_v17": mean(m, K_CDX_AI_COMPLETENESS_V17),
+            "ai_completeness_v17_sd": mean(m, K_CDX_AI_COMPLETENESS_V17, "std"),
+            "ai_breadth_v16": mean(m, K_CDX_AI_BREADTH_V16),
+            "ai_breadth_v17": mean(m, K_CDX_AI_BREADTH_V17),
             "breadth_v16": mean(m, K_CDX_BREADTH_V16), "breadth_v17": mean(m, K_CDX_BREADTH_V17),
         })
     return rows
@@ -660,6 +684,10 @@ def _write_report(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
         ("duration_ci_low", "CI low"), ("duration_ci_high", "CI high"),
         ("net_duration_median_s", "Net s"), ("startup_baseline_s", "Start-up s"),
         ("throughput_median_fields_per_s", "Fields/s")]))
+    hub = hub_request_medians(summary)
+    if hub:
+        counts = ", ".join(f"{TOOL_LABELS.get(t, t)} {m:g}" for t, m in hub.items())
+        parts.append(f"Median Hub requests per run (API + resolve, counted by the Hub's rate limiter): {counts}.\n\n")
     parts.append(_md_table("T2: reliability (per unique model)", _t2_rows(summary), [
         ("label", "Tool"), ("n_models", "Models"), ("models_failed", "Failed"),
         ("model_success_rate", "Success rate"), ("error_classes_models", "Error classes")]))
@@ -674,7 +702,9 @@ def _write_report(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
         ("label", "Tool"), ("scored", "BOMs scored"), ("no_bom", "No BOM"),
         ("conformance_v16", "Conf. v1.6"), ("conformance_v17", "Conf. v1.7"),
         ("completeness_v16", "Compl. v1.6"), ("completeness_v16_sd", "± SD"),
-        ("model_completeness_v16", "Model compl. v1.6"), ("model_completeness_v16_sd", "± SD"),
+        ("with_model", "BOMs w/ model"),
+        ("ai_completeness_v16", "AI compl. v1.6"), ("ai_completeness_v16_sd", "± SD"),
+        ("ai_breadth_v16", "AI breadth v1.6"),
         ("breadth_v16", "Breadth v1.6")]
     for task, run_type in T4_RUN_TYPE.items():
         parts.append(_md_table(f"T4: CycloneDX quality ({RUN_TYPE_LABELS[run_type]})", _t4_rows(summary, task), t4_cols))
@@ -750,10 +780,44 @@ def _has_cdx(record: dict) -> bool:
     return record.get("scores", {}).get(K_CDX_CONFORMANCE_VALID_V16) is not None
 
 
+def _has_model(record: dict) -> bool:
+    """True if the BOM has an ML model component.  A model component always fills the
+    required ``type``, so its completeness is > 0; the scorer gives exactly 0.0 only
+    when there is none."""
+    v = record.get("scores", {}).get(K_CDX_MODEL_COMPLETENESS_V16)
+    return isinstance(v, (int, float)) and v > 0
+
+
+_AI_VERSIONS = (  # (full detail, AI pct, in-memory AI detail)
+    (K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_AI_COMPLETENESS_V16, "ai_detail_v16"),
+    (K_CDX_COMPLETENESS_DETAIL_V17, K_CDX_AI_COMPLETENESS_V17, "ai_detail_v17"),
+)
+
+
+def _ai_record(record: dict) -> dict:
+    """AI-relevant completeness of one run, derived from its stored full-BOM detail;
+    an empty scan (no BOM) gets 0 and no detail."""
+    scores: dict[str, Any] = {}
+    for detail_k, pct_k, ai_detail_k in _AI_VERSIONS:
+        detail = record.get("scores", {}).get(detail_k)
+        ai = ai_relevant_detail(detail) if isinstance(detail, dict) else {}
+        if ai:
+            scores[pct_k] = round(sum(ai.values()) / len(ai) * 100, 4)
+            scores[ai_detail_k] = ai
+        else:
+            scores[pct_k] = 0.0
+    return {"input_spec": record.get("input_spec", ""), "scores": scores}
+
+
 def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
     """T4 for every CDX-producing tool.  ``total_runs`` counts ALL runs of the tool;
     runs that emitted no BOM (an empty scan) are reported as ``n_no_bom`` and are
-    not scored."""
+    not scored, except for AI-relevant completeness: there an empty scan counts as 0,
+    so every tool is averaged over every input whether or not it writes a BOM when
+    it finds nothing.  AI-relevant completeness / breadth = completeness / breadth
+    over the AI_RELEVANT_SECTIONS paths only, derived from the stored per-path
+    detail.
+    ``n_with_model`` = BOMs that contain a model component."""
     by_tool: dict[str, list[dict]] = defaultdict(list)
     for r in all_records:
         by_tool[r["tool"]].append(r)
@@ -763,6 +827,9 @@ def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
         if not recs:
             continue
         scores = [r.get("scores", {}) for r in recs]
+        empty = [r for r in all_recs
+                 if not _has_cdx(r) and r.get("scores", {}).get(K_ERROR_CLASS) == EC_SUCCESS_EMPTY]
+        ai_recs = [_ai_record(r) for r in recs + empty]
 
         v16_valid = [s[K_CDX_CONFORMANCE_VALID_V16] for s in scores
                      if s.get(K_CDX_CONFORMANCE_VALID_V16) is not None]
@@ -774,19 +841,19 @@ def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
             "task":   task,
             "total_runs": len(all_recs),
             "n_scored":   len(recs),
-            "n_no_bom":   sum(
-                1 for r in all_recs
-                if not _has_cdx(r) and r.get("scores", {}).get(K_ERROR_CLASS) == EC_SUCCESS_EMPTY
-            ),
+            "n_with_model": sum(_has_model(r) for r in recs),
+            "n_no_bom":   len(empty),
             "metrics": {
-                K_CDX_COMPLETENESS_V16:       _per_input_stats(recs, K_CDX_COMPLETENESS_V16),
-                K_CDX_BREADTH_V16:            _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V16),
-                K_CDX_MODEL_COMPLETENESS_V16: _per_input_stats(recs, K_CDX_MODEL_COMPLETENESS_V16),
-                K_CDX_COMPLETENESS_V17:       _per_input_stats(recs, K_CDX_COMPLETENESS_V17),
-                K_CDX_BREADTH_V17:            _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V17),
-                K_CDX_MODEL_COMPLETENESS_V17: _per_input_stats(recs, K_CDX_MODEL_COMPLETENESS_V17),
-                K_CDX_CONFORMANCE_PASS_V16:   pass_rate(v16_valid),
-                K_CDX_CONFORMANCE_PASS_V17:   pass_rate(v17_valid),
+                K_CDX_COMPLETENESS_V16:     _per_input_stats(recs, K_CDX_COMPLETENESS_V16),
+                K_CDX_BREADTH_V16:          _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V16),
+                K_CDX_AI_COMPLETENESS_V16:  _per_input_stats(ai_recs, K_CDX_AI_COMPLETENESS_V16),
+                K_CDX_AI_BREADTH_V16:       _agg_cdx_breadth(ai_recs, "ai_detail_v16"),
+                K_CDX_COMPLETENESS_V17:     _per_input_stats(recs, K_CDX_COMPLETENESS_V17),
+                K_CDX_BREADTH_V17:          _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V17),
+                K_CDX_AI_COMPLETENESS_V17:  _per_input_stats(ai_recs, K_CDX_AI_COMPLETENESS_V17),
+                K_CDX_AI_BREADTH_V17:       _agg_cdx_breadth(ai_recs, "ai_detail_v17"),
+                K_CDX_CONFORMANCE_PASS_V16: pass_rate(v16_valid),
+                K_CDX_CONFORMANCE_PASS_V17: pass_rate(v17_valid),
             },
         }
 

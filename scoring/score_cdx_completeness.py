@@ -236,6 +236,20 @@ _PREFIX_COMP = "components[]."
 _PREFIX_META = "metadata.component."
 
 
+# AI-relevant fields: the BOM's metadata (except metadata.tools, the generator's own
+# description), every component field (model card, data, licences, supplier, …) and
+# vulnerabilities; document provenance (annotations, formulation), services,
+# declarations etc. are left out.
+AI_RELEVANT_SECTIONS = ("metadata", "components[]", "vulnerabilities[]")
+_NOT_AI_RELEVANT = ("metadata.tools",)
+
+
+def ai_relevant_detail(detail: dict[str, bool]) -> dict[str, bool]:
+    """The AI-relevant part of a (merged) completeness detail."""
+    return {p: v for p, v in detail.items()
+            if p.split(".", 1)[0] in AI_RELEVANT_SECTIONS and not p.startswith(_NOT_AI_RELEVANT)}
+
+
 def merge_completeness_detail(detail: dict[str, bool]) -> dict[str, bool]:
     """Treat components[].X and metadata.component.X as the same logical field.
 

@@ -1,14 +1,10 @@
-"""Tests for the T3 matcher, detection extraction and the ground-truth files."""
+"""Tests for the T3 matcher and detection extraction (ground-truth files: test_ground_truth.py)."""
 
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
-
-from constants import EVAL_ROOT
 from scoring.ground_truth import GroundTruth, GTEntry
 from scoring.score_discovery import match_detections, prf
 
@@ -135,11 +131,3 @@ def test_akumar_unknown_model_is_unidentified(tmp_path: Path):
         {"model": "unknown", "type": "Ollama"},
     ]}))
     assert model_claims_akumar(p) == (["gpt-4o"], ["Ollama"])
-
-
-def test_ground_truth_files_validate_against_targets():
-    proc = subprocess.run(
-        [sys.executable, str(EVAL_ROOT / "scripts" / "validate_ground_truth.py")],
-        capture_output=True, text=True, cwd=EVAL_ROOT,
-    )
-    assert proc.returncode == 0, proc.stdout

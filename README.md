@@ -29,11 +29,13 @@ uv run pytest tests
 ## Usage
 
 ```bash
-uv run eval run --run-id eval-007                        # full evaluation
-uv run eval run --run-id eval-007 --repeats 10 --background
-tail -f results/runs/eval-007/run.log
-uv run eval status --run-id eval-007
-uv run eval aggregate --run-id eval-007                  # tables, report, figures
+uv run eval run --run-id eval-001                        # full evaluation
+uv run eval run --run-id eval-001 --repeats 10 --background
+tail -f results/runs/eval-001/run.log
+uv run eval status --run-id eval-001
+uv run eval aggregate --run-id eval-001                  # tables, report, figures
+uv run eval resolve-aliases [--dry-run]                  # after changing targets / ground truth
+uv run pytest tests                                     # incl. ground truth vs targets
 ```
 
 | Flag | Meaning |
@@ -42,7 +44,7 @@ uv run eval aggregate --run-id eval-007                  # tables, report, figur
 | `--tools a,b` / `--run-type model-id,source-scan` | run only these tools / run types (default: all) |
 | `--limit N` | first N model IDs (default 100) |
 | `--repeats N` | repeat the model-ID jobs N times (scans run once) |
-| `--cooldown MIN` | pause between job groups, a Hub rate-limit guard (default 5) |
+| `--cooldown MIN` | extra fixed pause between job groups (default 0; the Hub budget is already checked before every job) |
 | `--background` | run detached, logging to `results/runs/<run-id>/run.log` |
 | `--results-dir DIR` | results root (default `results/`), for all commands |
 

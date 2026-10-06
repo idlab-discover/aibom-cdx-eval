@@ -128,7 +128,7 @@ def _fake_runner(tmp_path, script, run_type="model-id"):
 
 
 def test_gated_failures_are_not_retried(tmp_path, monkeypatch):
-    monkeypatch.setattr("runners.base_runner.hub_budget", lambda token: None)
+    monkeypatch.setattr("runners.base_runner.hub_counters", lambda token: None)
     Fake = lambda script: _fake_runner(tmp_path, script)  # noqa: E731
     gated = Fake('echo "403 Client Error: Forbidden for url"; exit 1').run("r", "org/m", "d", tmp_path)
     assert not gated.success and gated.retries == 0
@@ -142,13 +142,48 @@ def test_parse_ratelimit_header():
     assert parse_ratelimit("garbage") is None and parse_ratelimit(None) is None
 
 
-def test_waits_for_hub_window_only_when_budget_low(tmp_path, monkeypatch):
+def test_hub_budget_wait_and_request_count(tmp_path, monkeypatch):
     import runners.base_runner as br
-    budgets = iter([(5, 0), (999, 300)])
     probes, sleeps = [], []
-    monkeypatch.setattr(br, "hub_budget", lambda token: probes.append(token) or next(budgets))
+
+    def fake(seq):
+        it = iter(seq)
+        monkeypatch.setattr(br, "hub_counters", lambda token: probes.append(token) or next(it))
+
     monkeypatch.setattr(br.time, "sleep", sleeps.append)
-    assert _fake_runner(tmp_path, "exit 0").run("r", "org/m", "d", tmp_path).retries == 0
-    assert sleeps[0] == 2 and len(probes) == 2      # low → wait t+2, then enough budget
-    _fake_runner(tmp_path, "exit 0", "source-scan").run("r", str(tmp_path), "d", tmp_path)
-    assert len(probes) == 2                         # source scans never probe the Hub
+    # Low budget → wait t+2; then before (900) and after (890): 4 buckets × (10 − 1 probe) = 36.
+    fake([[(5, 0)] * 4, [(900, 100)] * 4, [(890, 100)] * 4])
+    res = _fake_runner(tmp_path, "exit 0").run("r", "org/m", "d", tmp_path)
+    assert sleeps[0] == 2 and res.scores["hub_requests"] == 36
+    # A window reset between the readings (t grows) → unknown.
+    fake([[(900, 100)] * 4, [(990, 250)] * 4])
+    assert _fake_runner(tmp_path, "exit 0").run("r", "org/m", "d", tmp_path, 2).scores["hub_requests"] is None
+    n = len(probes)
+    res = _fake_runner(tmp_path, "exit 0", "source-scan").run("r", str(tmp_path), "d", tmp_path)
+    assert len(probes) == n and "hub_requests" not in res.scores   # source scans never probe the Hub
+
+
+
+def test_ai_completeness_uses_ai_sections_and_counts_empty_scans_as_zero():
+    from constants import (EC_SUCCESS_EMPTY, K_CDX_AI_BREADTH_V16, K_CDX_AI_COMPLETENESS_V16,
+                           K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_CONFORMANCE_VALID_V16, K_ERROR_CLASS)
+    from scoring.aggregate import _aggregate_cdx
+
+    def rec(target, filled):
+        detail = {p: p in filled for p in ("metadata.timestamp", "components[].name",
+                                           "vulnerabilities[].id", "annotations[].text",
+                                           "metadata.tools.components[].name")}
+        return {"tool": "t", "input_spec": target, "scores": {
+            K_CDX_CONFORMANCE_VALID_V16: True, K_CDX_COMPLETENESS_DETAIL_V16: detail}}
+
+    summary = {}
+    _aggregate_cdx(summary, "T4", [
+        rec("a", {"metadata.timestamp", "annotations[].text",     # annotations and
+                  "metadata.tools.components[].name"}),           # metadata.tools don't count: 1/3
+        rec("b", {"components[].name", "vulnerabilities[].id"}),  # 2/3
+        {"tool": "t", "input_spec": "c", "scores": {K_ERROR_CLASS: EC_SUCCESS_EMPTY}},  # empty scan: 0
+    ])
+    m = summary["t::T4"]["metrics"]
+    assert round(m[K_CDX_AI_COMPLETENESS_V16]["mean"], 2) == round((100 / 3 + 200 / 3 + 0) / 3, 2)
+    assert m[K_CDX_AI_BREADTH_V16]["mean"] == 100.0                # union covers all 3 AI paths
+    assert summary["t::T4"]["n_no_bom"] == 1

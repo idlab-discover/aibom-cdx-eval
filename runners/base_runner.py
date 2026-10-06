@@ -28,6 +28,7 @@ from constants import (
     K_DETECTED_IDS,
     K_ERROR_CLASS,
     K_UNIDENTIFIED,
+    K_HUB_REQUESTS,
     METRICS_FILENAME,
     RUN_MODEL_ID,
     RUN_SOURCE_SCAN,
@@ -90,7 +91,6 @@ class BaseRunner(abc.ABC):
     MAX_RETRIES: int = 3
     RETRY_DELAY: int = 30   # seconds
     TIMEOUT: int = 1800     # seconds (30 min)
-    HUB_ANONYMOUS: bool = False   # True if the tool sends no token (probe the per-IP budget)
 
     def __init__(self, tool_config: dict, run_type: str) -> None:
         self.tool_config = tool_config
@@ -150,24 +150,24 @@ class BaseRunner(abc.ABC):
     def post_run(self) -> None:
         """Called once after the last job of a run (e.g. to undo local patches)."""
 
-    def _wait_for_hub_budget(self, run_env: dict) -> bool:
-        """Model-id jobs only: if the Hub API budget is below hub_min_remaining,
-        sleep until its window resets.  Returns True if it waited."""
+    def _hub_counters_before(self, run_env: dict) -> tuple[list[tuple[int, int]] | None, bool]:
+        """Model-id jobs only: read the Hub rate-limit counters; while any bucket is
+        below hub_min_remaining, wait for its window to reset first.  Returns
+        (counters or None, whether it waited)."""
         if self.run_type != RUN_MODEL_ID:
-            return False
-        token = None if self.HUB_ANONYMOUS else run_env.get("HF_TOKEN")
+            return None, False
         reserve = int(self.tool_config.get("hub_min_remaining", 200))
         waited = False
+        counters = None
         for _ in range(3):   # bounded: a probe that keeps reporting low budget can't stall the run
-            budget = hub_budget(token)
-            if budget is None or budget[0] >= reserve:
+            counters = hub_counters(run_env.get("HF_TOKEN"))
+            low = [t for r, t in counters or [] if r < reserve]
+            if not low:
                 break
-            remaining, reset = budget
-            print(f"  ⏸  Hub budget r={remaining} (< {reserve}); waiting {reset + 2}s for window reset",
-                  flush=True)
-            time.sleep(reset + 2)
+            print(f"  ⏸  Hub budget low (< {reserve}); waiting {max(low) + 2}s for window reset", flush=True)
+            time.sleep(max(low) + 2)
             waited = True
-        return waited
+        return counters, waited
 
     def get_version(self) -> tuple[str, str]:
         """Return (version_string, commit). Default: the tool checkout's package
@@ -303,7 +303,7 @@ class BaseRunner(abc.ABC):
         else:
             actual_cmd = cmd
 
-        self._wait_for_hub_budget(run_env)    # before ts_start: never part of the timing
+        hub_before, _ = self._hub_counters_before(run_env)    # before ts_start: never timed
         ts_start = datetime.datetime.now(datetime.timezone.utc)
         exit_code = -1
         error_msg: str | None = None
@@ -321,7 +321,7 @@ class BaseRunner(abc.ABC):
                 )
                 # Hub budget used up (a 429): wait for the window reset.  Otherwise
                 # exponential backoff (30, 60, 120 s, ...) to ride out short Hub outages.
-                if not self._wait_for_hub_budget(run_env):
+                if not self._hub_counters_before(run_env)[1]:
                     time.sleep(retry_delay * 2 ** (attempt - 1))
 
             t0 = time.monotonic()
@@ -373,6 +373,12 @@ class BaseRunner(abc.ABC):
             self.after_success(tool_output_dir)
         log_tail = _read_tail(stderr_log, 2000) + "\n" + _read_tail(stdout_log, 2000)
         success, eval_error, raw_output_path, scores = self.evaluate(exit_code, log_tail, duration)
+        if self.run_type == RUN_MODEL_ID:
+            # A retry's own budget checks add probe requests: only single-attempt jobs count.
+            scores[K_HUB_REQUESTS] = (
+                hub_requests_between(hub_before, hub_counters(run_env.get("HF_TOKEN")))
+                if retries == 0 else None
+            )
         if eval_error:
             error_msg = eval_error
         elif not success and error_msg is None:
@@ -467,6 +473,7 @@ def git_commit(path: Path) -> str:
 
 
 _HUB_PROBE_URL = "https://huggingface.co/api/models/google-bert/bert-base-uncased"
+_RESOLVE_PROBE_URL = "https://huggingface.co/google-bert/bert-base-uncased/resolve/main/config.json"
 _RATELIMIT_RE = re.compile(r"\br=(\d+);t=(\d+)")
 
 
@@ -476,21 +483,47 @@ def parse_ratelimit(header: str | None) -> tuple[int, int] | None:
     return (int(m[1]), int(m[2])) if m else None
 
 
-def hub_budget(token: str | None) -> tuple[int, int] | None:
-    """Remaining Hub `api` budget (1000/5 min with a token, 500 per IP without) from the
-    `ratelimit` response header; None if the probe fails.  Costs one request.
-    ponytail: probes only the `api` bucket, not `resolvers` (5000/5 min); add it if
-    429s on /resolve/ ever show up."""
-    req = urllib.request.Request(_HUB_PROBE_URL, method="HEAD")
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):   # a /resolve/ 307 carries the header itself
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def hub_budget(token: str | None, url: str = _HUB_PROBE_URL) -> tuple[int, int] | None:
+    """Remaining Hub budget of the bucket ``url`` falls in (`api`: 1000/5 min with a
+    token, 500 per IP without; `resolvers` for /resolve/ URLs: 5000/5 min) from the
+    `ratelimit` response header; None if the probe fails.  Costs one request."""
+    req = urllib.request.Request(url, method="HEAD")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with _NO_REDIRECT_OPENER.open(req, timeout=10) as resp:
             return parse_ratelimit(resp.headers.get("ratelimit"))
-    except urllib.error.HTTPError as exc:     # a 429 still carries the header
+    except urllib.error.HTTPError as exc:     # a 429 (or an unfollowed 307) still carries the header
         return parse_ratelimit(exc.headers.get("ratelimit"))
     except Exception:  # noqa: BLE001
         return None
+
+
+def hub_counters(token: str | None) -> list[tuple[int, int]] | None:
+    """(remaining, reset) of the four Hub rate-limit buckets: `api` and `resolvers`,
+    each with and without the token (ALOHA sends none).  None if any probe fails."""
+    out = [hub_budget(tok, url) for url in (_HUB_PROBE_URL, _RESOLVE_PROBE_URL) for tok in (token, None)]
+    return None if any(b is None for b in out) else out
+
+
+def hub_requests_between(before: list[tuple[int, int]] | None,
+                         after: list[tuple[int, int]] | None) -> int | None:
+    """Hub requests made between two counter readings (the after-probe costs one per
+    bucket), as the Hub's rate limiter counts them; None if a reading is missing or a
+    window reset in between.  Exact only because jobs run one at a time."""
+    if before is None or after is None:
+        return None
+    if any(ta > tb for (_, tb), (_, ta) in zip(before, after)):
+        return None
+    return sum(rb - ra - 1 for (rb, _), (ra, _) in zip(before, after))
 
 
 def _parse_gnu_time_memory(time_file: Path) -> float | None:

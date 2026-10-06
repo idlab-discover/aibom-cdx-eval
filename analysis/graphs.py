@@ -6,14 +6,15 @@ boxplots, the run's metrics.json files under <root>/runs/<run-id>/) and writes P
 PNG figures to <root>/aggregated/figures/<run-id>/ (root = --results-dir).
 
 Figures (run type = what the tool was given):
-  fig1_t1_throughput_boxplot         model ID      T1 throughput distribution
-  fig2_t1_boxplot                    model ID      T1 generation-time distribution
+  fig1_t1_generation_time            model ID      T1 generation-time distribution
+                                                   (+ median Hub requests per run)
+  fig2_t1_throughput                 model ID      T1 throughput distribution
   fig3_t2_reliability                model ID      T2 share of models that succeed / fail
   fig4a_t3_discovery                 source scan   T3 precision / recall / F1, all targets
   fig4b_t3_recall_by_scope           source scan   T3 recall per target scope
   fig5a_t4_conformance_model_id / _source_scan      CycloneDX conformance pass rate
   fig5b_t4_completeness_model_id / _source_scan     full-BOM completeness and breadth
-  fig5c_t4_model_completeness_model_id / _source_scan   model-component completeness
+  fig5c_t4_ai_completeness_model_id / _source_scan      AI-relevant completeness and breadth
 
 Style rules (all figures)
   * No plot titles — the LaTeX caption provides them.  The only title is a short
@@ -58,6 +59,7 @@ from constants import (
     TOOL_LABELS,
     TOOL_ORDER,
 )
+from scoring.aggregate import hub_request_medians
 
 # ── Style ──────────────────────────────────────────────────────────────────
 
@@ -126,13 +128,13 @@ def make_figures(run_id: str, results_root: Path) -> None:
     plt.rcParams.update(_RC)
 
     run_dir = results_root / "runs" / run_id
-    _fig1_t1_throughput_boxplot(S, run_dir, out_dir)
-    _fig2_t1_boxplot(S, run_dir, out_dir)
+    _fig1_t1_generation_time(S, run_dir, out_dir)
+    _fig2_t1_throughput(S, run_dir, out_dir)
     _fig3_t2_reliability(S, out_dir)
     _fig4_t3_discovery(S, out_dir)
     _fig5a_t4_conformance(S, out_dir)
     _fig5b_t4_completeness(S, out_dir)
-    _fig5c_t4_model_completeness(S, out_dir)
+    _fig5c_t4_ai_completeness(S, out_dir)
 
     click.echo(f"Figures written to: {out_dir}")
 
@@ -145,6 +147,19 @@ def _save_figure(fig: plt.Figure, out_dir: Path, stem: str) -> None:
     """Write a figure to both PDF and PNG outputs."""
     for suffix in ("pdf", "png"):
         fig.savefig(out_dir / f"{stem}.{suffix}", bbox_inches="tight")
+
+
+def _tick_label(tool: str) -> str:
+    """Horizontal tick label: a tool name wrapped at its first space, and every line
+    longer than 10 characters at its last hyphen, so neighbouring labels never overlap."""
+    lines = []
+    for line in TOOL_LABELS[tool].split(" ", 1):
+        if len(line) > 10 and "-" in line:
+            head, tail = line.rsplit("-", 1)
+            lines += [f"{head}-", tail]
+        else:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def _subtitle(ax: Any, text: str) -> None:
@@ -299,13 +314,13 @@ def _grouped_bar_figure(
         tops.extend(top)
         if fmt:
             _label_bars(ax, x + off, vals, fmt, pad=(ylim[1] if ylim else max(tops)) * 0.012,
-                        fontsize=6.5, rotation=90 if len(series) > 2 else 0,
+                        fontsize=6.5, rotation=90 if len(series) > 1 else 0,
                         yerr=[0.0 if np.isnan(h) else float(h) for h in hi])
 
     ax.set_xticks(x)
-    ax.set_xticklabels([TOOL_LABELS[t] for t in tools], rotation=20, ha="right")
+    ax.set_xticklabels([_tick_label(t) for t in tools], fontsize=8)
     ax.set_ylabel(ylabel)
-    ax.set_ylim(*(ylim if ylim else (0, (max(tops) if tops else 1.0) * 1.25)))
+    ax.set_ylim(*(ylim if ylim else (0, (max(tops, default=0) or 1.0) * 1.25)))
     _subtitle(ax, subtitle)
 
     fig.tight_layout()
@@ -351,9 +366,11 @@ def _t1_boxplot(
     unit: str,
     value_fmt: str,
     stem: str,
-    legend_loc: str = "upper left",
+    hub_requests: dict | None = None,
 ) -> None:
-    """Render a log-scale per-tool boxplot of one per-run T1 quantity."""
+    """Render a log-scale per-tool boxplot of one per-run T1 quantity.  With
+    ``hub_requests`` ({tool: median}), each tool's median number of Hub
+    requests per run is written small under its box and explained in the legend."""
     tools = [t for t in TOOL_ORDER if f"{t}::{TASK_T1}" in S]
 
     tool_stats = {t: _load_t1_samples(t, run_dir, extract) for t in tools}
@@ -368,9 +385,7 @@ def _t1_boxplot(
         return len(repeats) if repeats else 1
 
     repeat_n = max((_repeat_n(t) for t in tools), default=1)
-    box_labels = [
-        f"{TOOL_LABELS[t]}\n(repeats={repeat_n}, N={len(data[t])})" for t in tools
-    ]
+    box_labels = [f"{_tick_label(t)}\nN={len(data[t])}" for t in tools]
 
     fig, ax = plt.subplots(figsize=(6.5, 4.0))
 
@@ -428,37 +443,52 @@ def _t1_boxplot(
     mean_patch = plt.Line2D([0], [0], marker="x", color="w", markerfacecolor="black",
                             markeredgecolor="black", markersize=8, markeredgewidth=2,
                             label="Mean (μ)")
-    ax.legend(handles=[med_patch, mean_patch], frameon=False, fontsize=7.5, loc=legend_loc)
-    fig.text(0.99, 0.01, "N = models x repeats", ha="right", va="bottom", fontsize=7, color="dimgrey")
-
+    handles = [med_patch, mean_patch]
+    hub = {t: hub_requests[t] for t in tools if t in (hub_requests or {})}
+    if hub:
+        # Free a strip at the bottom (8 % of the log axis) for the numbers.
+        lo, hi = (np.log10(v) for v in ax.get_ylim())
+        ax.set_ylim(bottom=10 ** ((lo - 0.08 * hi) / 0.92))
+        for i, t in enumerate(tools, start=1):
+            if t in hub:
+                ax.text(i, 0.025, f"{hub[t]:g}", transform=ax.get_xaxis_transform(),
+                        ha="center", va="bottom", fontsize=7.5, color="dimgrey")
+        handles.append(plt.Line2D([0], [0], marker="$n$", color="w", markerfacecolor="dimgrey",
+                                  markeredgecolor="dimgrey", markersize=7,
+                                  label="Hub requests per run (median)"))
+    ax.set_xlabel(f"N = models x repeats ({repeat_n} repeats)", fontsize=7, color="dimgrey")
     fig.tight_layout()
+    # One legend row below the plot (as in the other figures): it never covers a box.
+    ax.legend(handles=handles, frameon=False, fontsize=7.5, ncol=len(handles),
+              loc="upper center", bbox_to_anchor=(0.5, _below_axes_anchor(fig, ax)))
     _save_figure(fig, out, stem)
     plt.close(fig)
     click.echo(f"  Saved {stem}.pdf/.png")
 
 
-def _fig1_t1_throughput_boxplot(S: dict, run_dir: Path, out: Path) -> None:
-    """Figure 1 — T1: normalised-throughput distribution (boxplot)."""
-    _t1_boxplot(
-        S, run_dir, out,
-        extract=lambda m: (m.get("scores") or {}).get(K_NORMALIZED_THROUGHPUT),
-        ylabel="Throughput (fields / s, log scale)",
-        unit=" f/s",
-        value_fmt=".1f",
-        stem="fig1_t1_throughput_boxplot",
-        legend_loc="lower left",
-    )
-
-
-def _fig2_t1_boxplot(S: dict, run_dir: Path, out: Path) -> None:
-    """Figure 2 — T1: generation-time distribution (boxplot)."""
+def _fig1_t1_generation_time(S: dict, run_dir: Path, out: Path) -> None:
+    """Figure 1 — T1: generation-time distribution (boxplot) with the median number
+    of Hub requests per run (measured around each job), when available."""
     _t1_boxplot(
         S, run_dir, out,
         extract=lambda m: m.get("duration_seconds"),
         ylabel="Generation time (s, log scale)",
         unit="s",
         value_fmt=".2f",
-        stem="fig2_t1_boxplot",
+        stem="fig1_t1_generation_time",
+        hub_requests=hub_request_medians(S),
+    )
+
+
+def _fig2_t1_throughput(S: dict, run_dir: Path, out: Path) -> None:
+    """Figure 2 — T1: normalised-throughput distribution (boxplot)."""
+    _t1_boxplot(
+        S, run_dir, out,
+        extract=lambda m: (m.get("scores") or {}).get(K_NORMALIZED_THROUGHPUT),
+        ylabel="Throughput (fields / s, log scale)",
+        unit=" f/s",
+        value_fmt=".1f",
+        stem="fig2_t1_throughput",
     )
 
 
@@ -502,8 +532,7 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
 
     n_models = [S[f"{t}::{TASK_T2}"].get("n_models", 0) for t in tools]
     ax.set_xticks(x)
-    ax.set_xticklabels([f"{TOOL_LABELS[t]}\n(N={n} models)" for t, n in zip(tools, n_models)],
-                       rotation=18, ha="right", fontsize=8)
+    ax.set_xticklabels([f"{_tick_label(t)}\nN={n}" for t, n in zip(tools, n_models)], fontsize=7.5)
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Share of models")
     _subtitle(ax, RUN_TYPE_LABELS[RUN_MODEL_ID])
@@ -686,18 +715,21 @@ def _fig5b_t4_completeness(S: dict, out: Path) -> None:
         )
 
 
-def _fig5c_t4_model_completeness(S: dict, out: Path) -> None:
-    """Figure 5c — T4: model-component completeness (±1 SD across inputs)."""
+def _fig5c_t4_ai_completeness(S: dict, out: Path) -> None:
+    """Figure 5c — T4: AI-relevant completeness (dark, ±1 SD across inputs) and
+    breadth (light), as Figure 5b but over the metadata, components[] and
+    vulnerabilities[] fields only.  Hatched = CycloneDX v1.7."""
     for task, run_type in T4_RUN_TYPE.items():
         suffix = run_type.replace("-", "_")          # model_id / source_scan
         _grouped_bar_figure(
-            S, out, f"fig5c_t4_model_completeness_{suffix}", task, TOOL_ORDER,
+            S, out, f"fig5c_t4_ai_completeness_{suffix}", task, TOOL_ORDER,
             series=[
-                Series("cdx_model_completeness_pct_v16", "model completeness v1.6", "dark", err="std"),
-                Series("cdx_model_completeness_pct_v17", "model completeness v1.7", "dark",
-                       v17=True, err="std"),
+                Series("cdx_ai_completeness_pct_v16", "completeness v1.6", "dark", err="std"),
+                Series("cdx_ai_completeness_pct_v17", "completeness v1.7", "dark", v17=True, err="std"),
+                Series("cdx_ai_breadth_pct_v16",      "breadth v1.6",      "light"),
+                Series("cdx_ai_breadth_pct_v17",      "breadth v1.7",      "light", v17=True),
             ],
-            ylabel="Model-component field coverage (%)", subtitle=RUN_TYPE_LABELS[run_type],
-            figsize=(5.4, 3.8), fmt=lambda v: f"{v:.2f}",
+            ylabel="AI-relevant field coverage (%)", subtitle=RUN_TYPE_LABELS[run_type],
+            figsize=(6.0, 3.8), fmt=lambda v: f"{v:.2f}",
         )
 

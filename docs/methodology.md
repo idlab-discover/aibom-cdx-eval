@@ -24,6 +24,7 @@ Tools are only compared within a run type. T4 is reported separately per run typ
 - **Statistics** are taken over **unique models**. Each model's repeats collapse to their median, and then the median, IQR and bootstrap 95 % CI of the median are reported.
 - **Net duration** (`net_duration_stats`) subtracts the tool's no-op start-up baseline measured at run start, so a Python tool launched through `uv run` is not compared to a native binary on start-up cost alone. The baseline approximates the fixed cost; it is not an exact split.
 - **Throughput** (`normalized_throughput`, JSON leaf fields per second) mixes speed with output richness. Treat it as secondary.
+- **Hub requests** (`hub_requests`) per job: the Hub's rate-limit counters (`ratelimit` header; api and resolvers, with and without the token) are read just before and just after each model-ID job, outside the timed span. The difference is what the Hub's rate limiter counted for that job; CDN downloads are not included. It is exact because jobs run one at a time; a job with a retry or a window reset in between records none. Reported as the median over unique models, under each box in Figure 1.
 
 ## T2: reliability
 
@@ -70,7 +71,7 @@ Tools are only compared within a run type. T4 is reported separately per run typ
   - The aggregator re-matches the stored `detected_ids` against the current ground truth, so a ground-truth fix needs no tool re-run.
 - **Targets:**
   - They contain realistic distractors (dataset IDs, container images, repos, output paths) and no comments describing any scanner's rules.
-  - `scripts/validate_ground_truth.py` checks that every ground-truth literal occurs in its file, and that every `org/name` literal in a target is accounted for.
+  - `tests/test_ground_truth.py` checks that every ground-truth literal occurs in its file, and that every `org/name` literal in a target is accounted for.
 - **Documented support:** `benchmarks/tool-claims.yaml` records, per tool and scope, what the tool's own docs claim (`yes` / `partial` / `no`, with evidence). fig4b shows this as a marker under each bar.
 
 ## T4: CycloneDX quality
@@ -79,8 +80,8 @@ The scores are measured against the full CycloneDX v1.6 and v1.7 schemas in `sch
 
 - **Conformance:** JSON-schema validation against v1.6 and v1.7, whatever `specVersion` the BOM declares.
 - **Full-BOM completeness:** the share of the schema's leaf paths that the BOM fills. `metadata.component.X` and `components[].X` count as one field.
-- **Model-component completeness:** the share of component-schema paths filled on the BOM's primary `machine-learning-model` component (`metadata.component` if it is a model, otherwise the first model in `components[]`). A BOM without a model component scores 0.
-- **Breadth:** the union of the fields filled across all runs of a tool.
+- **AI-relevant completeness:** full-BOM completeness restricted to the `metadata` (without `metadata.tools`, the generator's own description), `components[]` (model card, data, licences, supplier, …) and `vulnerabilities[]` fields. Document-level provenance that a generator writes whatever it scanned (`annotations`, `formulation`), and `services`, `declarations`, `definitions`, `compositions`, … are left out. In source scans an empty scan that wrote no BOM scores 0, so every tool is averaged over every target.
+- **Breadth:** the union of the fields filled across all runs of a tool (for AI-relevant breadth, over the AI-relevant fields only).
 - **Fill rules:**
   - An array field counts if any element fills it.
   - Placeholder strings (`"No description available"`, `"[unknown]"`, `"n/a"`, …) count as empty.

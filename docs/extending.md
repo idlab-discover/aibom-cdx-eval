@@ -22,7 +22,7 @@
 1. Add the source files under `targets/<target-id>/`.
 2. Add `benchmarks/ground-truth/T3-source-scan/<target-id>.json` (schema v2: `models`, `neutral`, `not_models`; see [methodology.md](methodology.md)).
 3. Add the dataset to `run_types.source-scan.datasets` in `orchestrator/config.yaml` with its `scope_bucket`.
-4. Run `uv run python scripts/validate_ground_truth.py` and, for Hub models, `uv run python scripts/resolve_ground_truth_aliases.py`.
+4. Run `uv run eval resolve-aliases` (adds Hub redirect targets as aliases), then `uv run pytest tests -k ground_truth`.
 
 ## Adding a model-ID dataset
 

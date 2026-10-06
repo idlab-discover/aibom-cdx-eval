@@ -15,7 +15,6 @@ from runners.base_runner import BaseRunner
 
 
 class ALOHARunner(BaseRunner):
-    HUB_ANONYMOUS = True   # sends no token: limited by the per-IP budget (500 / 5 min)
     # working_dir() resolved by BaseRunner from config path (tools/ALOHA)
 
     def get_version(self) -> tuple[str, str]:

@@ -18,14 +18,14 @@ Every figure is written as both PDF and PNG.
 
 | Figure | Run type | Shows |
 |---|---|---|
-| `fig1_t1_throughput_boxplot` | model ID | T1 throughput (fields / s) |
-| `fig2_t1_boxplot` | model ID | T1 generation time |
+| `fig1_t1_generation_time` | model ID | T1 generation time, with the median Hub requests per run under each box |
+| `fig2_t1_throughput` | model ID | T1 throughput (fields / s) |
 | `fig3_t2_reliability` | model ID | T2 share of models that succeed, failures by class |
 | `fig4a_t3_discovery` | source scan | T3 precision / recall / F1, all targets |
 | `fig4b_t3_recall_by_scope` | source scan | T3 recall per target scope, with each tool's documented-support marker |
 | `fig5a_t4_conformance_{model_id,source_scan}` | both | CycloneDX conformance pass rate |
 | `fig5b_t4_completeness_{model_id,source_scan}` | both | full-BOM completeness and breadth |
-| `fig5c_t4_model_completeness_{model_id,source_scan}` | both | model-component completeness |
+| `fig5c_t4_ai_completeness_{model_id,source_scan}` | both | AI-relevant completeness and breadth (metadata, components[], vulnerabilities[] fields only) |
 
 ## Conventions
 

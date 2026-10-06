@@ -156,11 +156,11 @@ def test_aggregate_and_figures_end_to_end(tmp_path):
     assert summary["aibomgen-cli::T4-model-id"]["metrics"]["cdx_conformance_pass_rate_v16"] == 1.0
     stems = {p.stem for p in (tmp_path / "aggregated" / "figures" / "e2e").glob("*.png")}
     assert stems == {
-        "fig1_t1_throughput_boxplot", "fig2_t1_boxplot", "fig3_t2_reliability",
+        "fig1_t1_generation_time", "fig2_t1_throughput", "fig3_t2_reliability",
         "fig4a_t3_discovery", "fig4b_t3_recall_by_scope",
         "fig5a_t4_conformance_model_id", "fig5a_t4_conformance_source_scan",
         "fig5b_t4_completeness_model_id", "fig5b_t4_completeness_source_scan",
-        "fig5c_t4_model_completeness_model_id", "fig5c_t4_model_completeness_source_scan",
+        "fig5c_t4_ai_completeness_model_id", "fig5c_t4_ai_completeness_source_scan",
     }
 
 
