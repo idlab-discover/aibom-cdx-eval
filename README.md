@@ -75,7 +75,7 @@ uv run pytest tests                                     # incl. ground truth vs 
 
 | Tool | Source | Input | Tasks | Version | CycloneDX |
 |---|---|---|---|---|:---:|
-| aibomgen-cli | [idlab-discover/aibomgen-cli](https://github.com/idlab-discover/aibomgen-cli) | model ID, source dir | T1–T4 | dev @ `a61b958` | ✓ |
+| aibomgen-cli | [idlab-discover/aibomgen-cli](https://github.com/idlab-discover/aibomgen-cli) | model ID, source dir | T1–T4 | v0.3.0 @ `9490399` | ✓ |
 | OWASP aibom-generator | [GenAI-Security-Project/aibom-generator](https://github.com/GenAI-Security-Project/aibom-generator) | model ID | T1, T2, T4 | 1.0.2 @ `9b8056a` | ✓ |
 | ALOHA | [MSR4SBOM/ALOHA](https://github.com/MSR4SBOM/ALOHA) | model ID | T1, T2, T4 | `1973472` | ✓ |
 | lab700xorg-aisbom | [Lab700xOrg/aisbom](https://github.com/Lab700xOrg/aisbom) | model ID | T1, T2, T4 | 1.6.0 @ `75234b5` | ✓ |

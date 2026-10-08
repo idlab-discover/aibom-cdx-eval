@@ -31,5 +31,5 @@ cp tools/locks/akumar-aibom/uv.lock tools/akumar-aibom/uv.lock
        --frozen-lockfile --package-import-method copy --prod \
   && ln -sf ../../bin/cdxgen.js node_modules/.bin/aibom)
 # ALOHA needs no install step: `uv run --with-requirements requirements.txt` (== pins).
-(cd tools/aibomgen-cli && go build -o aibomgen-cli .)          # submodule commit
+(cd tools/aibomgen-cli && go build -trimpath -ldflags "-X main.Version=$(git describe --tags)" -o aibomgen-cli .)
 echo "Setup done."

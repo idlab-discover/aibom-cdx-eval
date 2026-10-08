@@ -47,28 +47,10 @@ class AibomgenCliRunner(BaseRunner):
     def build_command(
         self, input_spec: str, output_dir: Path, run_env: dict
     ) -> list[str]:
-        binary = self._binary()
-        hf_token = run_env.get("HF_TOKEN", "")
-
-        base = [binary]
-        if hf_token:
-            base += ["--hf-token", hf_token]
-
+        # HF_TOKEN reaches the binary through the subprocess environment.
         if self.run_type == RUN_SOURCE_SCAN:
-            return base + [
-                "scan",
-                "--input", input_spec,
-                "--output", str(output_dir / "out"),
-                "--format", "json",
-                "--log-level", "quiet",
-            ]
+            args = ["scan", "--input", input_spec]
         else:
-            # model-id: generate mode
-            return base + [
-                "generate",
-                "--model-id", input_spec,
-                "--output", str(output_dir / "out"),
-                "--format", "json",
-                "--log-level", "quiet",
-                "--hf-mode", "online",
-            ]
+            args = ["generate", "--model-id", input_spec]
+        # --output is a directory: one <model-ref>.aibom.cdx.json per model.
+        return [self._binary(), *args, "--output", str(output_dir), "--format", "json", "--quiet"]
