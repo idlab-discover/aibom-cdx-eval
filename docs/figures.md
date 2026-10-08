@@ -19,7 +19,7 @@ Every figure is written as both PDF and PNG.
 | Figure | Run type | Shows |
 |---|---|---|
 | `fig1_t1_generation_time` | model ID | T1 generation time, with the median Hub requests per run under each box |
-| `fig2_t1_throughput` | model ID | T1 throughput (fields / s) |
+| `fig2_t1_throughput` | model ID | T1 throughput (fields / s), with the median Hub requests per run under each box |
 | `fig3_t2_reliability` | model ID | T2 share of models that succeed, failures by class |
 | `fig4a_t3_discovery` | source scan | T3 precision / recall / F1, all targets |
 | `fig4b_t3_recall_by_scope` | source scan | T3 recall per target scope, with each tool's documented-support marker |

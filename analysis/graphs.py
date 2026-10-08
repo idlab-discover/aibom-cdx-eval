@@ -481,7 +481,8 @@ def _fig1_t1_generation_time(S: dict, run_dir: Path, out: Path) -> None:
 
 
 def _fig2_t1_throughput(S: dict, run_dir: Path, out: Path) -> None:
-    """Figure 2 — T1: normalised-throughput distribution (boxplot)."""
+    """Figure 2 — T1: normalised-throughput distribution (boxplot) with the median
+    number of Hub requests per run, when available."""
     _t1_boxplot(
         S, run_dir, out,
         extract=lambda m: (m.get("scores") or {}).get(K_NORMALIZED_THROUGHPUT),
@@ -489,6 +490,7 @@ def _fig2_t1_throughput(S: dict, run_dir: Path, out: Path) -> None:
         unit=" f/s",
         value_fmt=".1f",
         stem="fig2_t1_throughput",
+        hub_requests=hub_request_medians(S),
     )
 
 
