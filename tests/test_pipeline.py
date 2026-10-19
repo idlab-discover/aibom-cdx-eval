@@ -61,6 +61,26 @@ def test_run_timeout_is_not_retried(tmp_path):
     assert res.scores["error_class"] == "timeout"
 
 
+def test_run_timeout_kills_the_tools_children(tmp_path):
+    import os
+
+    res = _run(_ShRunner("sleep 30 & echo $! > {out}/../child.pid; wait", tmp_path, timeout_seconds=1), tmp_path)
+    assert res.scores["error_class"] == "timeout"
+    pid = int(next((tmp_path / "runs").rglob("child.pid")).read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_run_never_scores_files_of_an_earlier_attempt(tmp_path):
+    runner = _ShRunner("true", tmp_path, run_type="source-scan")
+    runner.EMPTY_OUTPUT_RUN_TYPES = frozenset({"source-scan"})
+    _run(runner, tmp_path)                                         # creates the job's folders
+    stale = next((tmp_path / "runs").rglob("tool_output")) / "old.json"
+    stale.write_text('{"components": [{"type": "machine-learning-model", "name": "org/old"}]}')
+    res = _run(runner, tmp_path)
+    assert res.scores["error_class"] == "success_empty" and res.scores["detected_ids"] == []
+
+
 def _cfg(tmp_path: Path) -> dict:
     ids = tmp_path / "ids.json"
     ids.write_text(json.dumps({"models": ["m1", "m2", "m3"]}))
@@ -154,6 +174,9 @@ def test_aggregate_and_figures_end_to_end(tmp_path):
     assert summary["aibomgen-cli::T3"]["metrics"]["by_scope"]["mixed"]["tp_total"] == 1
     assert (data / "e2e_t3_scope_mixed.csv").exists() and not (data / "e2e_t3_scope_python.csv").exists()
     assert summary["aibomgen-cli::T4-model-id"]["metrics"]["cdx_conformance_pass_rate_v16"] == 1.0
+    # fig1 draws the T1 table's distribution: one value per model (median of its repeats).
+    dur = summary["aibomgen-cli::T1"]["metrics"]["duration_stats"]
+    assert dur["values"] == [2.5, 2.5] and dur["median"] == 2.5 and dur["n_models"] == 2
     stems = {p.stem for p in (tmp_path / "aggregated" / "figures" / "e2e").glob("*.png")}
     assert stems == {
         "fig1_t1_generation_time", "fig2_t1_throughput", "fig3_t2_reliability",
@@ -224,3 +247,52 @@ def test_unknown_filter_values_are_rejected(tmp_path):
         with pytest.raises(click.UsageError):
             _run_once("r", tmp_path, _cfg(tmp_path), cooldown=0, limit=1, n=1, **kwargs)
     assert not (tmp_path / "r").exists()                    # rejected before anything ran
+
+
+def test_resume_keeps_the_job_index_and_status_counts_only_indexed_jobs(tmp_path, monkeypatch):
+    import re
+
+    from rich.console import Console
+
+    from orchestrator import run_benchmark
+    from runners.base_runner import job_output_dir
+
+    def job(spec):
+        return {"tool": "a", "run_type": "model-id", "dataset": "pop", "input_spec": spec, "repeat_index": 1}
+
+    run_dir = tmp_path / "r"
+    run_dir.mkdir()
+    run_benchmark._merge_job_index(run_dir, [job("m1"), job("m2")])
+    run_benchmark._merge_job_index(run_dir, [job("m2"), job("m3")])   # a filtered resume
+    assert [j["input_spec"] for j in json.loads((run_dir / "job_index.json").read_text())] == ["m1", "m2", "m3"]
+
+    d = job_output_dir(run_dir, "a", "model-id", "pop", "m1", 1)
+    d.mkdir(parents=True)
+    (d / "metrics.json").write_text('{"success": true}')
+    (job_output_dir(run_dir, "a", "model-id", "pop", "other", 1)).mkdir(parents=True)   # not indexed
+    console = Console(record=True, width=100)
+    monkeypatch.setattr(run_benchmark, "console", console)
+    run_benchmark._status_run("r", tmp_path)
+    text = console.export_text()
+    assert re.search(r"Succeeded\s+│\s+1", text) and re.search(r"Pending\s+│\s+2", text)
+    assert "running" in text
+
+
+def test_a_second_live_run_of_the_same_id_is_refused(tmp_path):
+    import os
+    import subprocess
+
+    import click
+
+    from orchestrator.run_benchmark import _claim_run
+
+    other = subprocess.Popen(["sleep", "30"])
+    try:
+        (tmp_path / "run.pid").write_text(str(other.pid))
+        with pytest.raises(click.UsageError):
+            _claim_run(tmp_path)
+    finally:
+        other.kill()
+        other.wait()
+    _claim_run(tmp_path)                                            # dead pid: the run may resume
+    assert (tmp_path / "run.pid").read_text() == str(os.getpid())

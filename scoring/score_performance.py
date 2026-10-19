@@ -4,8 +4,7 @@ score_performance.py — T1 performance metrics for AIBOM generation.
 Computes normalised throughput so that a tool producing a rich, complete
 BOM is not unfairly penalised against one producing a trivially thin BOM.
 
-  normalized_throughput     = fields_present / duration_seconds
-  size_normalized_throughput = fields_present / output_size_bytes  (secondary)
+  normalized_throughput = fields_present / duration_seconds
 
 `fields_present` counts the *structural breadth* of the output JSON:
   - Scalar leaves (str, int, float, bool) are counted as 1 each.
@@ -75,7 +74,6 @@ def score_performance(output_path: Path, duration_seconds: float) -> dict[str, A
             "fields_present":              int | None,
             "output_size_bytes":           int | None,
             "normalized_throughput":       float | None,   # fields / second
-            "size_normalized_throughput":  float | None,   # fields / byte
         }
     """
     try:
@@ -87,7 +85,6 @@ def score_performance(output_path: Path, duration_seconds: float) -> dict[str, A
             "fields_present": None,
             "output_size_bytes": None,
             "normalized_throughput": None,
-            "size_normalized_throughput": None,
         }
 
     fields_present = _count_leaves(bom)
@@ -96,13 +93,8 @@ def score_performance(output_path: Path, duration_seconds: float) -> dict[str, A
     if duration_seconds and duration_seconds > 0:
         normalized_throughput = round(fields_present / duration_seconds, 4)
 
-    size_normalized_throughput: float | None = None
-    if output_size_bytes and output_size_bytes > 0:
-        size_normalized_throughput = round(fields_present / output_size_bytes, 6)
-
     return {
         "fields_present": fields_present,
         "output_size_bytes": output_size_bytes,
         "normalized_throughput": normalized_throughput,
-        "size_normalized_throughput": size_normalized_throughput,
     }

@@ -187,3 +187,43 @@ def test_ai_completeness_uses_ai_sections_and_counts_empty_scans_as_zero():
     assert round(m[K_CDX_AI_COMPLETENESS_V16]["mean"], 2) == round((100 / 3 + 200 / 3 + 0) / 3, 2)
     assert m[K_CDX_AI_BREADTH_V16]["mean"] == 100.0                # union covers all 3 AI paths
     assert summary["t::T4"]["n_no_bom"] == 1
+
+
+def test_aloha_fails_only_when_it_wrote_no_bom(tmp_path):
+    from runners.run_aloha import ALOHARunner
+
+    runner = ALOHARunner({"id": "ALOHA", "path": str(tmp_path)}, "model-id")
+    log = tmp_path / "stdout.log"
+    log.write_text("❌ Failed to retrieve README.md for model x: 401 Client Error\n"
+                   "✅ AIBoM successfully created: out/x.json\n")
+    assert runner.adjust_exit_code(0, log, log) == 0             # README miss: the BOM still counts
+    log.write_text("❌ Request failed. Error: 429 Client Error\n")
+    assert runner.adjust_exit_code(0, log, log) == 1             # fatal exit() with code 0
+
+
+def test_a_hub_counter_that_went_up_gives_no_count():
+    from runners.base_runner import hub_requests_between
+
+    before = [(900, 100)] * 4
+    assert hub_requests_between(before, [(890, 99)] * 4) == 36
+    assert hub_requests_between(before, [(890, 99)] * 3 + [(950, 99)]) is None
+
+
+def test_failed_scan_scores_zero_in_t4_like_an_empty_scan():
+    from constants import (EC_CRASH, EC_SUCCESS_EMPTY, K_CDX_AI_COMPLETENESS_V16,
+                           K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_CONFORMANCE_VALID_V16, K_ERROR_CLASS,
+                           TASK_T4_MODEL_ID, TASK_T4_SOURCE_SCAN)
+    from scoring.aggregate import _aggregate_cdx
+
+    recs = [
+        {"tool": "t", "input_spec": "a", "scores": {K_CDX_CONFORMANCE_VALID_V16: True,
+                                                    K_CDX_COMPLETENESS_DETAIL_V16: {"components[].name": True}}},
+        {"tool": "t", "input_spec": "b", "scores": {K_ERROR_CLASS: EC_SUCCESS_EMPTY}},
+        {"tool": "t", "input_spec": "c", "scores": {K_ERROR_CLASS: EC_CRASH}},
+    ]
+    scan, model_id = {}, {}
+    _aggregate_cdx(scan, TASK_T4_SOURCE_SCAN, recs)
+    _aggregate_cdx(model_id, TASK_T4_MODEL_ID, recs)
+    assert scan[f"t::{TASK_T4_SOURCE_SCAN}"]["n_no_bom"] == 2
+    assert round(scan[f"t::{TASK_T4_SOURCE_SCAN}"]["metrics"][K_CDX_AI_COMPLETENESS_V16]["mean"], 2) == 33.33
+    assert model_id[f"t::{TASK_T4_MODEL_ID}"]["n_no_bom"] == 1     # model ID: a failure is not a 0

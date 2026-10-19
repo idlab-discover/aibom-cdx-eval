@@ -21,10 +21,10 @@ Tools are only compared within a run type. T4 is reported separately per run typ
 ## T1: performance
 
 - **Duration** is the wall time of the **final attempt** only. Retries and their waits are excluded; `total_wall_seconds` keeps the whole span.
-- **Statistics** are taken over **unique models**. Each model's repeats collapse to their median, and then the median, IQR and bootstrap 95 % CI of the median are reported.
+- **Statistics** are taken over **unique models**. Each model's repeats collapse to their median, and then the median, IQR and bootstrap 95 % CI of the median are reported. Figures 1 and 2 draw exactly these per-model values, so their boxes match the table.
 - **Net duration** (`net_duration_stats`) subtracts the tool's no-op start-up baseline measured at run start, so a Python tool launched through `uv run` is not compared to a native binary on start-up cost alone. The baseline approximates the fixed cost; it is not an exact split.
 - **Throughput** (`normalized_throughput`, JSON leaf fields per second) mixes speed with output richness. Treat it as secondary.
-- **Hub requests** (`hub_requests`) per job: the Hub's rate-limit counters (`ratelimit` header; api and resolvers, with and without the token) are read just before and just after each model-ID job, outside the timed span. The difference is what the Hub's rate limiter counted for that job; CDN downloads are not included. It is exact because jobs run one at a time; a job with a retry or a window reset in between records none. Reported as the median over unique models, under each box in Figure 1.
+- **Hub requests** (`hub_requests`) per job: the Hub's rate-limit counters (`ratelimit` header; api and resolvers, with and without the token) are read just before and just after each model-ID job, outside the timed span. The difference is what the Hub's rate limiter counted for that job; CDN downloads are not included. It relies on jobs running one at a time (`eval run` refuses a second live process on the same run ID). A job with a retry, a window reset in between, or a counter that went up (the Hub's counters are occasionally inconsistent on sub-second jobs) records none, so treat a single count as approximate. Reported as the median over unique models, under each box in Figure 1.
 
 ## T2: reliability
 
@@ -36,8 +36,8 @@ Tools are only compared within a run type. T4 is reported separately per run typ
   - `network_error`, `parse_error`, `crash`
   - `missing_output` (exit 0 but no BOM)
 - **Silent failures count as failures:**
-  - ALOHA exits 0 on API errors but prints ❌, which its runner treats as a failure.
-  - ALOHA sends no Hub token (it runs as published), so gated models fail for it as `gated_or_unauthorized`; the other tools receive `HF_TOKEN`.
+  - ALOHA exits 0 on fatal API errors; its runner treats a run as failed when ALOHA did not report writing its BOM ("AIBoM successfully created").
+  - ALOHA sends no Hub token (it runs as published), so it cannot read a gated model's README. It still writes a BOM from the public model metadata, which counts as a success, as any other tool's BOM does; the other tools receive `HF_TOKEN`.
   - For a model it cannot resolve, cdxgen exits 0 with a BOM that has no model component; in a model-id run that counts as no output.
 
 ## T3: model discovery
@@ -80,7 +80,7 @@ The scores are measured against the full CycloneDX v1.6 and v1.7 schemas in `sch
 
 - **Conformance:** JSON-schema validation against v1.6 and v1.7, whatever `specVersion` the BOM declares.
 - **Full-BOM completeness:** the share of the schema's leaf paths that the BOM fills. `metadata.component.X` and `components[].X` count as one field.
-- **AI-relevant completeness:** full-BOM completeness restricted to the `metadata` (without `metadata.tools`, the generator's own description), `components[]` (model card, data, licences, supplier, …) and `vulnerabilities[]` fields. Document-level provenance that a generator writes whatever it scanned (`annotations`, `formulation`), and `services`, `declarations`, `definitions`, `compositions`, … are left out. In source scans an empty scan that wrote no BOM scores 0, so every tool is averaged over every target.
+- **AI-relevant completeness:** full-BOM completeness restricted to the `metadata` (without `metadata.tools`, the generator's own description), `components[]` (model card, data, licences, supplier, …) and `vulnerabilities[]` fields. Document-level provenance that a generator writes whatever it scanned (`annotations`, `formulation`), and `services`, `declarations`, `definitions`, `compositions`, … are left out. In source scans a scan that wrote no BOM (empty or failed) scores 0, so every tool is averaged over every target.
 - **Breadth:** the union of the fields filled across all runs of a tool (for AI-relevant breadth, over the AI-relevant fields only).
 - **Fill rules:**
   - An array field counts if any element fills it.
@@ -89,7 +89,7 @@ The scores are measured against the full CycloneDX v1.6 and v1.7 schemas in `sch
 - **Several BOMs per run** (scan mode emits one per model):
   - Conformance requires every BOM to validate.
   - Completeness is the mean over the BOMs.
-  - A scan that emits no BOM is reported as `n_no_bom` and is not scored.
+  - A run that emits no BOM is reported as `n_no_bom` and is not scored (except for AI-relevant completeness, above).
 - **Native formats:** akumar's native output is exported to CycloneDX first (`aibom export`). jorisbot writes no CycloneDX and has no T4 score.
 
 Completeness measures whether a field is filled, not whether its value is correct.

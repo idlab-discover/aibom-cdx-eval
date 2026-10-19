@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 import urllib.error
@@ -286,7 +287,6 @@ class BaseRunner(abc.ABC):
         if run_env.get("HF_TOKEN"):
             run_env["HUGGINGFACE_TOKEN"] = run_env["HF_HUB_TOKEN"] = run_env["HF_TOKEN"]
         run_env["PYTHONHASHSEED"] = DETERMINISM_ENV["PYTHONHASHSEED"]
-        run_env.setdefault("TRANSFORMERS_SEED", DETERMINISM_ENV["TRANSFORMERS_SEED"])
 
         version, commit = self.get_version()   # before pre_run: reflects the pristine checkout
         self.pre_run()
@@ -324,17 +324,30 @@ class BaseRunner(abc.ABC):
                 if not self._hub_counters_before(run_env)[1]:
                     time.sleep(retry_delay * 2 ** (attempt - 1))
 
+            # Every attempt starts from an empty output dir: files of an earlier attempt
+            # (or of a resumed failed job) must never be scored.
+            shutil.rmtree(tool_output_dir, ignore_errors=True)
+            tool_output_dir.mkdir(parents=True)
+
             t0 = time.monotonic()
             try:
                 with open(stdout_log, "w") as fout, open(stderr_log, "w") as ferr:
-                    proc = subprocess.run(
+                    # Own process group: a timeout kills the tool and all its children
+                    # (/usr/bin/time and `uv run` would otherwise leave the tool running).
+                    proc = subprocess.Popen(
                         actual_cmd,
                         cwd=str(self.working_dir()),
                         env=run_env,
                         stdout=fout,
                         stderr=ferr,
-                        timeout=timeout,
+                        start_new_session=True,
                     )
+                    try:
+                        proc.wait(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        proc.wait()
+                        raise
                 attempt_duration = time.monotonic() - t0
                 exit_code = proc.returncode
                 exit_code = self.adjust_exit_code(exit_code, stdout_log, stderr_log)
@@ -523,7 +536,9 @@ def hub_requests_between(before: list[tuple[int, int]] | None,
         return None
     if any(ta > tb for (_, tb), (_, ta) in zip(before, after)):
         return None
-    return sum(rb - ra - 1 for (rb, _), (ra, _) in zip(before, after))
+    diffs = [rb - ra - 1 for (rb, _), (ra, _) in zip(before, after)]
+    # A counter that went up (seen on sub-second jobs) means the reading is unreliable.
+    return None if any(d < 0 for d in diffs) else sum(diffs)
 
 
 def _parse_gnu_time_memory(time_file: Path) -> float | None:

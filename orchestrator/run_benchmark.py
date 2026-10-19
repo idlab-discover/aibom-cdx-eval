@@ -147,6 +147,7 @@ def run(
     if background:
         run_dir = runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        _claim_run(run_dir, write=False)    # refuse here, not silently in the log
         _daemonize(run_dir, run_id)
         # Child process continues below.
 
@@ -397,10 +398,9 @@ def _run_once(
 
     run_dir = runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    _claim_run(run_dir)
     _write_run_meta(run_dir, run_id, cfg, jobs, repeats=n, limit=limit)
-
-    with open(run_dir / JOB_INDEX_FILENAME, "w") as f:
-        json.dump(jobs, f, indent=2)
+    _merge_job_index(run_dir, jobs)
 
     pending = [job for job in jobs if not _job_succeeded(run_dir, job)]
     skipped = len(jobs) - len(pending)
@@ -446,6 +446,46 @@ def _run_once(
     console.print(
         f"\n[bold]Done:[/bold] {done} succeeded, {failed} failed, {skipped} skipped."
     )
+
+
+def _claim_run(run_dir: Path, write: bool = True) -> None:
+    """Refuse to start while another live process runs this run ID (both would run
+    the same pending jobs, and Hub counts and timings assume one job at a time);
+    then record our own pid."""
+    pid_path = run_dir / "run.pid"
+    try:
+        pid = int(pid_path.read_text().strip())
+    except (OSError, ValueError):
+        pid = None
+    if pid and pid != os.getpid():
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:      # exists, owned by someone else
+            alive = True
+        if alive:
+            raise click.UsageError(f"{run_dir.name} is already running (pid {pid})")
+    if write:
+        pid_path.write_text(str(os.getpid()))
+
+
+def _job_key(job: dict) -> tuple:
+    return job["tool"], job["run_type"], job["dataset"], job["input_spec"], job["repeat_index"]
+
+
+def _merge_job_index(run_dir: Path, jobs: list[dict]) -> None:
+    """Add ``jobs`` to the run's job index; a filtered resume never drops jobs of
+    earlier invocations."""
+    path = run_dir / JOB_INDEX_FILENAME
+    try:
+        merged = json.loads(path.read_text())
+    except (OSError, ValueError):
+        merged = []
+    known = {_job_key(j) for j in merged}
+    merged += [j for j in jobs if _job_key(j) not in known]
+    path.write_text(json.dumps(merged, indent=2))
 
 
 def _load_config() -> dict:
@@ -596,23 +636,24 @@ def _status_run(run_id: str, results_path: Path) -> None:
         click.echo(f"Run not found: {run_dir}", err=True)
         sys.exit(1)
 
-    outcomes = []
-    for path in run_dir.rglob(METRICS_FILENAME):
-        try:
-            outcomes.append(bool(json.loads(path.read_text()).get("success")))
-        except (OSError, ValueError):
-            continue
-    stats = {"done": sum(outcomes), "failed": len(outcomes) - sum(outcomes), "total": len(outcomes)}
+    try:
+        jobs = json.loads((run_dir / JOB_INDEX_FILENAME).read_text())
+    except (OSError, ValueError):
+        jobs = []
+    from runners.base_runner import job_output_dir
 
-    index_path = run_dir / JOB_INDEX_FILENAME
-    total_jobs: int | str = "?"
-    if index_path.exists():
-        with open(index_path) as f:
-            total_jobs = len(json.load(f))
+    done = failed = 0
+    for job in jobs:
+        if _job_succeeded(run_dir, job):
+            done += 1
+        elif (job_output_dir(run_dir, job["tool"], job["run_type"], job["dataset"],
+                             job["input_spec"], job["repeat_index"]) / METRICS_FILENAME).exists():
+            failed += 1
+    pending = len(jobs) - done - failed
 
-    if isinstance(total_jobs, int) and stats["total"] >= total_jobs and total_jobs > 0:
+    if jobs and pending == 0:
         state = "[green]complete[/green]"
-    elif stats["total"] > 0:
+    elif done or failed:
         state = "[yellow]running[/yellow]"
     else:
         state = "[dim]pending[/dim]"
@@ -621,10 +662,10 @@ def _status_run(run_id: str, results_path: Path) -> None:
     table.add_column("Metric")
     table.add_column("Value")
     table.add_row("State", state)
-    table.add_row("Total jobs (index)", str(total_jobs))
-    table.add_row("Succeeded", str(stats["done"]))
-    table.add_row("Failed", str(stats["failed"]))
-    table.add_row("Total recorded (metrics.json)", str(stats["total"]))
+    table.add_row("Total jobs (index)", str(len(jobs)))
+    table.add_row("Succeeded", str(done))
+    table.add_row("Failed", str(failed))
+    table.add_row("Pending", str(pending))
     console.print(table)
 
 
@@ -648,7 +689,7 @@ def _daemonize(run_dir: Path, run_id: str) -> None:
 
     os.setsid()
 
-    log_fd = open(log_path, "w", buffering=1)
+    log_fd = open(log_path, "a", buffering=1)   # a resumed run keeps the old log
     os.dup2(log_fd.fileno(), 1)
     os.dup2(log_fd.fileno(), 2)
     log_fd.close()

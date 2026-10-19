@@ -66,7 +66,6 @@ EC_MISSING_OUTPUT        = "missing_output"
 # ── Metric key names ───────────────────────────────────────────────────────
 
 K_NORMALIZED_THROUGHPUT       = "normalized_throughput"
-K_SIZE_NORM_THROUGHPUT        = "size_normalized_throughput"
 K_FIELDS_PRESENT              = "fields_present"
 K_OUTPUT_SIZE_BYTES           = "output_size_bytes"
 K_ERROR_CLASS                 = "error_class"
@@ -99,7 +98,6 @@ K_CDX_CONFORMANCE_PASS_V17    = "cdx_conformance_pass_rate_v17"
 
 DETERMINISM_ENV: dict[str, str] = {
     "PYTHONHASHSEED":    "42",
-    "TRANSFORMERS_SEED": "42",
 }
 
 # ── Tool display ───────────────────────────────────────────────────────────

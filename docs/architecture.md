@@ -37,8 +37,9 @@ orchestrator/config.yaml ──► eval run ──► one job per (tool × run t
 <root>/
 ├── runs/<run-id>/
 │   ├── run_meta.json                         tool versions/commits, host, start-up baselines
-│   ├── job_index.json                        every job of the run, in execution order
-│   ├── run.log, run.pid                      with --background
+│   ├── job_index.json                        every job of the run (a filtered resume adds to it)
+│   ├── run.pid                               pid of the live run (a second run of this ID is refused)
+│   ├── run.log                               with --background (appended on resume)
 │   └── <tool>/<run-type>/<dataset>/<input-slug>/rNN/
 │       ├── metrics.json                      see below
 │       ├── stdout.log, stderr.log, time_stats.txt

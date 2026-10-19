@@ -18,8 +18,8 @@ Every figure is written as both PDF and PNG.
 
 | Figure | Run type | Shows |
 |---|---|---|
-| `fig1_t1_generation_time` | model ID | T1 generation time, with the median Hub requests per run under each box |
-| `fig2_t1_throughput` | model ID | T1 throughput (fields / s), with the median Hub requests per run under each box |
+| `fig1_t1_generation_time` | model ID | T1 generation time, one value per model (median of its repeats), with the median Hub requests per run under each box |
+| `fig2_t1_throughput` | model ID | T1 throughput (fields / s), one value per model, with the median Hub requests per run under each box |
 | `fig3_t2_reliability` | model ID | T2 share of models that succeed, failures by class |
 | `fig4a_t3_discovery` | source scan | T3 precision / recall / F1, all targets |
 | `fig4b_t3_recall_by_scope` | source scan | T3 recall per target scope, with each tool's documented-support marker |
@@ -28,6 +28,8 @@ Every figure is written as both PDF and PNG.
 | `fig5c_t4_ai_completeness_{model_id,source_scan}` | both | AI-relevant completeness and breadth (metadata, components[], vulnerabilities[] fields only) |
 
 ## Conventions
+
+- **Figures = tables:** figures read only `<run>_summary.json`, the file every table and the report come from, and select tools with the same `scoring.aggregate.tools_for`. A number in a figure is the number in the table (T1 boxes: median and quartiles over unique models).
 
 - **Titles:** none, because the LaTeX caption provides them. The only title is a subtitle naming the run type (for T3, also the scope).
 - **One encoding everywhere:**

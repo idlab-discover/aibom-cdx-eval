@@ -63,12 +63,9 @@ from constants import (
     K_DETECTED_IDS,
     K_ERROR_CLASS,
     K_FAILURE_RATE,
-    K_FIELDS_PRESENT,
     K_HUB_REQUESTS,
     K_NORMALIZED_THROUGHPUT,
-    K_OUTPUT_SIZE_BYTES,
     K_RETRIES_MEAN,
-    K_SIZE_NORM_THROUGHPUT,
     K_SUCCESS_RATE,
     K_UNIDENTIFIED,
     TASK_T1,
@@ -181,19 +178,6 @@ def _stdev(values: list[float]) -> float | None:
     return round(statistics.stdev(values), 4)
 
 
-def _agg_metric(scores_list: list[dict], key: str) -> dict | None:
-    values = [s[key] for s in scores_list if key in s and s[key] is not None]
-    numeric = [float(v) for v in values if isinstance(v, (int, float, bool))]
-    if not numeric:
-        return None
-    return {
-        "mean": round(_mean(numeric), 4),
-        "min":  round(min(numeric), 4),
-        "max":  round(max(numeric), 4),
-        "n":    len(numeric),
-    }
-
-
 def _bootstrap_median_ci(values: list[float]) -> tuple[float, float] | None:
     """95% bootstrap CI of the median, resampling units (models) with replacement."""
     if len(values) < 2:
@@ -212,7 +196,7 @@ def _distribution(per_model: dict[str, list[float]]) -> dict | None:
     Each model's repeats are collapsed to their median first: repeats of one
     model are not independent samples.
     """
-    model_vals = [statistics.median(v) for v in per_model.values() if v]
+    model_vals = sorted(statistics.median(v) for v in per_model.values() if v)
     if not model_vals:
         return None
     q1, q3 = (float(x) for x in np.percentile(model_vals, [25, 75]))
@@ -224,6 +208,8 @@ def _distribution(per_model: dict[str, list[float]]) -> dict | None:
         "ci_low":   ci[0] if ci else None,
         "ci_high":  ci[1] if ci else None,
         "n_models": len(model_vals),
+        # One value per model: what the T1 boxplots draw, so figure and table agree.
+        "values":   model_vals,
     }
 
 
@@ -237,13 +223,9 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
         by_tool[r["tool"]].append(r)
 
     for tool, recs in sorted(by_tool.items()):
-        scores = [r.get("scores", {}) for r in recs]
         successes = [r for r in recs if r.get("success")]
         baseline = baselines.get(tool)
 
-        durations = [
-            r["duration_seconds"] for r in successes if r.get("duration_seconds") is not None
-        ]
         per_model_dur: dict[str, list[float]] = defaultdict(list)
         per_model_thr: dict[str, list[float]] = defaultdict(list)
         per_model_net: dict[str, list[float]] = defaultdict(list)
@@ -259,7 +241,7 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
             if isinstance(thr, (int, float)):
                 per_model_thr[spec].append(float(thr))
             hub = (r.get("scores") or {}).get(K_HUB_REQUESTS)
-            if isinstance(hub, (int, float)):
+            if isinstance(hub, (int, float)) and hub >= 0:   # older runs stored impossible negatives
                 per_model_hub[spec].append(float(hub))
 
         summary[f"{tool}::{TASK_T1}"] = {
@@ -269,17 +251,6 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
             "successful":   len(successes),
             K_SUCCESS_RATE: round(len(successes) / max(len(recs), 1), 4),
             "metrics": {
-                **{
-                    m: _agg_metric(scores, m)
-                    for m in (K_NORMALIZED_THROUGHPUT, K_SIZE_NORM_THROUGHPUT,
-                              K_FIELDS_PRESENT, K_OUTPUT_SIZE_BYTES)
-                },
-                "duration_seconds": {
-                    "mean": _mean(durations),
-                    "min":  round(min(durations), 4),
-                    "max":  round(max(durations), 4),
-                    "n":    len(durations),
-                } if durations else None,
                 # Distributions over unique models (repeats collapsed to their median).
                 "duration_stats":            _distribution(per_model_dur),
                 "throughput_stats":          _distribution(per_model_thr),
@@ -503,7 +474,7 @@ def _aggregate_discovery(summary: dict, task: str, records: list[dict]) -> None:
 
 def _write_t3_tables(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
     """Write T3 tables (all scanners, jorisbot included) for the whole set and per scope."""
-    tools = [t for t in TOOL_ORDER if f"{t}::{TASK_T3}" in summary]
+    tools = tools_for(summary, TASK_T3)
 
     for scope in ("full", *_SCOPE_BUCKETS):
         rows = [r for r in (_t3_row(summary, tool, scope) for tool in tools) if r is not None]
@@ -571,20 +542,20 @@ def _csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def hub_request_medians(summary: dict[str, Any]) -> dict[str, float]:
     """tool -> median Hub requests per run (over unique models), where measured."""
     out = {}
-    for t in _tools_for(summary, TASK_T1):
+    for t in tools_for(summary, TASK_T1):
         stats = summary[f"{t}::{TASK_T1}"]["metrics"].get("hub_requests_stats")
         if stats:
             out[t] = stats["median"]
     return out
 
 
-def _tools_for(summary: dict[str, Any], task: str) -> list[str]:
+def tools_for(summary: dict[str, Any], task: str) -> list[str]:
     return [t for t in TOOL_ORDER if f"{t}::{task}" in summary]
 
 
 def _t1_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    for tool in _tools_for(summary, TASK_T1):
+    for tool in tools_for(summary, TASK_T1):
         e = summary[f"{tool}::{TASK_T1}"]
         m = e["metrics"]
         d, net, thr = m.get("duration_stats") or {}, m.get("net_duration_stats") or {}, m.get("throughput_stats") or {}
@@ -602,7 +573,7 @@ def _t1_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _t2_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    for tool in _tools_for(summary, TASK_T2):
+    for tool in tools_for(summary, TASK_T2):
         e = summary[f"{tool}::{TASK_T2}"]
         rows.append({
             "tool": tool, "label": TOOL_LABELS.get(tool, tool),
@@ -621,7 +592,7 @@ def _t4_rows(summary: dict[str, Any], task: str) -> list[dict[str, Any]]:
         return v.get(field) if isinstance(v, dict) else None
 
     rows = []
-    for tool in _tools_for(summary, task):
+    for tool in tools_for(summary, task):
         e = summary[f"{tool}::{task}"]
         m = e["metrics"]
         rows.append({
@@ -676,7 +647,7 @@ def _md_table(title: str, rows: list[dict[str, Any]], columns: list[tuple[str, s
 
 def _write_report(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
     """One markdown file with every headline table of the run."""
-    t3 = [r for r in (_t3_row(summary, t, "full") for t in _tools_for(summary, TASK_T3)) if r]
+    t3 = [r for r in (_t3_row(summary, t, "full") for t in tools_for(summary, TASK_T3)) if r]
     parts = [f"# {run_id}: results\n\nGenerated by `eval aggregate`; every number comes from "
              f"`{run_id}_summary.json`.\n\n"]
     parts.append(_md_table(f"T1: performance ({RUN_TYPE_LABELS[RUN_MODEL_ID]}; median over unique models)", _t1_rows(summary), [
@@ -811,10 +782,10 @@ def _ai_record(record: dict) -> dict:
 
 def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
     """T4 for every CDX-producing tool.  ``total_runs`` counts ALL runs of the tool;
-    runs that emitted no BOM (an empty scan) are reported as ``n_no_bom`` and are
-    not scored, except for AI-relevant completeness: there an empty scan counts as 0,
-    so every tool is averaged over every input whether or not it writes a BOM when
-    it finds nothing.  AI-relevant completeness / breadth = completeness / breadth
+    runs that emitted no BOM (an empty scan; for source scans also a failed one) are
+    reported as ``n_no_bom`` and are not scored, except for AI-relevant completeness:
+    there they count as 0, so every scanner is averaged over every target whether it
+    writes no BOM because it found nothing or because it failed.  AI-relevant completeness / breadth = completeness / breadth
     over the AI_RELEVANT_SECTIONS paths only, derived from the stored per-path
     detail.
     ``n_with_model`` = BOMs that contain a model component."""
@@ -827,8 +798,10 @@ def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
         if not recs:
             continue
         scores = [r.get("scores", {}) for r in recs]
-        empty = [r for r in all_recs
-                 if not _has_cdx(r) and r.get("scores", {}).get(K_ERROR_CLASS) == EC_SUCCESS_EMPTY]
+        # Source scans: every target counts, so a scan without a BOM (empty OR failed)
+        # scores 0, as it counts as zero detections in T3.
+        empty = [r for r in all_recs if not _has_cdx(r) and (
+            task == TASK_T4_SOURCE_SCAN or r.get("scores", {}).get(K_ERROR_CLASS) == EC_SUCCESS_EMPTY)]
         ai_recs = [_ai_record(r) for r in recs + empty]
 
         v16_valid = [s[K_CDX_CONFORMANCE_VALID_V16] for s in scores
