@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "target": "target-04-python",
+  "models": [
+    {
+      "id": "sentence-transformers/multi-qa-MiniLM-L6-cos-v1",
+      "scope": "python_literal",
+      "file": "embed.py",
+      "pattern": "SentenceTransformer()"
+    },
+    {
+      "id": "BAAI/bge-reranker-v2-m3",
+      "scope": "python_literal",
+      "file": "embed.py",
+      "pattern": "ChatOpenAI(model=)"
+    },
+    {
+      "id": "microsoft/Florence-2-base",
+      "scope": "python_literal",
+      "file": "vision.py",
+      "pattern": "Ollama(model=)"
+    },
+    {
+      "id": "openai/whisper-large-v3",
+      "scope": "python_literal",
+      "file": "audio.py",
+      "pattern": "whisper.load_model"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "sentence-transformers/natural-questions",
+      "kind": "dataset (load_dataset), same org as a model",
+      "file": "embed.py"
+    }
+  ]
+}

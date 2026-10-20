@@ -1,0 +1,52 @@
+{
+  "schema_version": 2,
+  "target": "target-09-config",
+  "models": [
+    {
+      "id": "google-bert/bert-base-multilingual-cased",
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "YAML config: model.name"
+    },
+    {
+      "id": "sentence-transformers/all-MiniLM-L6-v2",
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "YAML config: embedding_model"
+    },
+    {
+      "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "YAML config: reranker.model_id",
+      "aliases": [
+        "cross-encoder/ms-marco-MiniLM-L6-v2"
+      ]
+    },
+    {
+      "id": "BAAI/bge-large-en-v1.5",
+      "scope": "yaml_literal",
+      "file": "pipeline.yaml",
+      "pattern": "YAML pipeline step"
+    },
+    {
+      "id": "facebook/bart-large-mnli",
+      "scope": "yaml_literal",
+      "file": "pipeline.yaml",
+      "pattern": "YAML pipeline step"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "HuggingFaceFW/fineweb-edu",
+      "kind": "dataset (config key)",
+      "file": "config.yaml"
+    },
+    {
+      "id": "outputs/bert-ner",
+      "kind": "output directory",
+      "file": "config.yaml"
+    }
+  ]
+}

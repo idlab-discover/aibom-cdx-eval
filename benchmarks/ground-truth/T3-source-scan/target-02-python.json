@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "target": "target-02-python",
+  "models": [
+    {
+      "id": "WiebeVandendriessche/model-card-example",
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "ChatOpenAI(model=)"
+    },
+    {
+      "id": "templates/model-card-example",
+      "scope": "python_literal",
+      "file": "src/use_model.py",
+      "pattern": "AutoModel.from_pretrained"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "stanfordnlp/imdb",
+      "kind": "dataset (load_dataset)",
+      "file": "src/use_dataset.py"
+    }
+  ]
+}

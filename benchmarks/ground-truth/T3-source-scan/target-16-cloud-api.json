@@ -1,0 +1,44 @@
+{
+  "schema_version": 2,
+  "target": "target-16-cloud-api",
+  "models": [
+    {
+      "id": "codellama",
+      "scope": "python_literal",
+      "file": "agents.py",
+      "pattern": "Ollama(model=\"codellama\")"
+    },
+    {
+      "id": "gpt-4o",
+      "scope": "python_literal",
+      "file": "agents.py",
+      "pattern": "openai_client.chat.completions.create(model=\"gpt-4o\")"
+    },
+    {
+      "id": "claude-3-5-haiku-20241022",
+      "scope": "python_literal",
+      "file": "agents.py",
+      "pattern": "anthropic_client.messages.create(model=\"claude-3-5-haiku-20241022\")"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "config.yaml: models.default: gpt-4o-mini"
+    },
+    {
+      "id": "text-embedding-3-small",
+      "scope": "yaml_literal",
+      "file": "config.yaml",
+      "pattern": "config.yaml: models.embedding: text-embedding-3-small"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "acme-ai/agent-prompts",
+      "kind": "GitHub repository",
+      "file": "config.yaml"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "target": "target-10-config",
+  "models": [
+    {
+      "id": "microsoft/phi-2",
+      "scope": "env_literal",
+      "file": ".env",
+      "pattern": ".env HF_MODEL_ID"
+    },
+    {
+      "id": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "scope": "env_literal",
+      "file": ".env",
+      "pattern": ".env EMBEDDING_MODEL"
+    },
+    {
+      "id": "cross-encoder/nli-deberta-v3-small",
+      "scope": "env_literal",
+      "file": ".env",
+      "pattern": ".env RERANKER_MODEL"
+    },
+    {
+      "id": "stabilityai/stable-diffusion-xl-base-1.0",
+      "scope": "requirements_comment",
+      "file": "requirements.txt",
+      "pattern": "requirements.txt comment"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "acme-research/ner-experiments",
+      "kind": "W&B project",
+      "file": ".env"
+    }
+  ]
+}

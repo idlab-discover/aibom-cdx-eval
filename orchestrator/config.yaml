@@ -1,0 +1,124 @@
+# ============================================================
+# AIBOM-CDX-Eval — orchestrator configuration
+# ============================================================
+#
+# Run types (what a tool is given):
+#   model-id    — a Hugging Face model ID → AIBOM.  Scored as T1 (performance),
+#                 T2 (reliability) and T4-model-id (CycloneDX quality).
+#   source-scan — a source-code directory → AIBOM.  Scored as T3 (model discovery)
+#                 and T4-source-scan (CycloneDX quality).
+#
+# Tools are only compared within a run type:
+#   model-id    : aibomgen-cli (generate), OWASP aibom-generator, ALOHA, lab700xorg-aisbom,
+#                 cdxgen-aibom (pkg:huggingface/ purl), hts-aibom (scan-huggingface)
+#   source-scan : aibomgen-cli (scan), akumar-aibom, jorisbot-aibom, trusera-aibom,
+#                 cdxgen-aibom (AI-BOM mode), hts-aibom
+#
+# T4 scores every tool that writes CycloneDX (all except jorisbot-aibom).
+# ============================================================
+
+run:
+  # max_retries .. hub_min_remaining are passed to every runner (orchestrator _tool_config); a
+  # tool block may override them. default_dataset_limit and baseline_samples are for the orchestrator.
+  max_retries: 5              # every failure except gated (401/403) and timeouts (methodology.md, Retries)
+  retry_delay_seconds: 30      # doubles per retry: 30, 60, 120, 240, 480 s
+  timeout_seconds: 1800
+  retry_on_timeout: false      # a timed-out job is recorded as a failure, not retried
+  # Hub rate limits (fixed 5-min windows): api 1000 per token / 500 per IP without one (ALOHA),
+  # resolvers 5000.  Before every model-id job (and before a retry) the runner reads all four
+  # counters from the Hub's `ratelimit` header and waits for the window reset if any has fewer
+  # than this left; it reads them again after the job and stores the difference as the job's
+  # `hub_requests` (summed over the four buckets; the heaviest job, lab700xorg-aisbom at up
+  # to 491, is mostly resolver/file requests from the 5000 budget).  It can't go much higher:
+  # the anonymous api bucket holds only 500, and probes + ALOHA use ~250 of it per window.
+  # shortcut: the probes cost 8 requests/job (~2 per bucket), a few % of each budget; batch them if a budget gets tight.
+  hub_min_remaining: 200
+  default_dataset_limit: 100
+  baseline_samples: 5          # no-op invocations timed per tool to estimate process start-up cost
+
+# Every tool needs a runner in runners/__init__.py REGISTRY. Display names: constants.TOOL_LABELS.
+# uv tools run with --frozen: their dependencies come from the lock installed by scripts/setup.sh.
+tools:
+
+  aibomgen-cli:
+    path: "tools/aibomgen-cli"     # submodule; scripts/setup.sh builds <path>/aibomgen-cli
+    run_types: ["model-id", "source-scan"]
+
+  aibom-generator:
+    path: "tools/aibom-generator"
+    entry: ["uv", "run", "--frozen", "python", "-m", "src.cli"]
+    run_types: ["model-id"]
+
+  # Run as on GitHub: ALOHA sends no Hub token, so gated models fail for it.
+  ALOHA:
+    path: "tools/ALOHA"
+    entry: ["uv", "run", "--with-requirements", "requirements.txt", "python", "ALOHA.py"]
+    run_types: ["model-id"]
+
+  # `aisbom scan hf://{model_id}` (zero-download header inspection), run from the tool's own
+  # .venv (see the runner). It scans binary ML artifacts, not source code, so it is not in source-scan.
+  lab700xorg-aisbom:
+    path: "tools/lab700xorg-aisbom"
+    run_types: ["model-id"]
+
+  akumar-aibom:
+    path: "tools/akumar-aibom"
+    entry: ["uv", "run", "--frozen", "aibom"]
+    run_types: ["source-scan"]
+
+  jorisbot-aibom:              # custom JSON output, not CycloneDX: no T4
+    path: "tools/jorisbot-aibom"
+    entry: ["uv", "run", "--frozen", "aibom"]
+    run_types: ["source-scan"]
+
+  trusera-aibom:
+    path: "tools/trusera-aibom"
+    entry: ["uv", "run", "--frozen", "ai-bom"]
+    run_types: ["source-scan"]
+
+  # OWASP CycloneDX generator, `aibom` command (project type `ai`; its model-id input is a
+  # pkg:huggingface/ purl). Needs Node.js >= 20.
+  cdxgen-aibom:
+    path: "tools/cdxgen"            # submodule at tag v12.8.5; scripts/setup.sh installs its pnpm-lock.yaml
+    run_types: ["model-id", "source-scan"]
+
+  hts-aibom:
+    path: "tools/hts-aibom"
+    entry: ["uv", "run", "--frozen", "python", "-m", "aibom"]
+    run_types: ["model-id", "source-scan"]
+
+# Ground truth for a source-scan dataset is benchmarks/ground-truth/T3-source-scan/<id>.json.
+run_types:
+
+  model-id:
+    datasets:
+      - {id: popular, path: "benchmarks/datasets/model-ids/popular.json", type: model-id-list}
+
+  source-scan:
+    datasets:
+      # python scope
+      - {id: target-01-python, path: "targets/target-01-python", type: source-dir, scope_bucket: python}
+      - {id: target-02-python, path: "targets/target-02-python", type: source-dir, scope_bucket: python}
+      - {id: target-03-python, path: "targets/target-03-python", type: source-dir, scope_bucket: python}
+      - {id: target-04-python, path: "targets/target-04-python", type: source-dir, scope_bucket: python}
+
+      # mixed scope
+      - {id: target-05-mixed, path: "targets/target-05-mixed", type: source-dir, scope_bucket: mixed}
+      - {id: target-06-mixed, path: "targets/target-06-mixed", type: source-dir, scope_bucket: mixed}
+      - {id: target-07-mixed, path: "targets/target-07-mixed", type: source-dir, scope_bucket: mixed}
+      - {id: target-08-mixed, path: "targets/target-08-mixed", type: source-dir, scope_bucket: mixed}
+
+      # config scope
+      - {id: target-09-config, path: "targets/target-09-config", type: source-dir, scope_bucket: config}
+      - {id: target-10-config, path: "targets/target-10-config", type: source-dir, scope_bucket: config}
+      - {id: target-11-config, path: "targets/target-11-config", type: source-dir, scope_bucket: config}
+      - {id: target-12-config, path: "targets/target-12-config", type: source-dir, scope_bucket: config}
+
+      # cloud_api scope
+      - {id: target-13-cloud-api, path: "targets/target-13-cloud-api", type: source-dir, scope_bucket: cloud_api}
+      # target-14-cloud-api: Cloud-AI chatbot (LangChain + OpenAI + Anthropic + Ollama). Tests cloud-API class-instantiation patterns; no HuggingFace transformers.
+      - {id: target-14-cloud-api, path: "targets/target-14-cloud-api", type: source-dir, scope_bucket: cloud_api}
+      # target-15-cloud-api: Hybrid RAG: local HuggingFace embeddings (from_pretrained + SentenceTransformer) + cloud LLM generation (ChatOpenAI + ChatAnthropic). Tests tools that span both pattern families.
+      - {id: target-15-cloud-api, path: "targets/target-15-cloud-api", type: source-dir, scope_bucket: cloud_api}
+      # target-16-cloud-api: Multi-agent pipeline: direct OpenAI/Anthropic SDK clients (model= in .create() calls) + Ollama class instantiation + YAML config. Tests deeper extraction beyond class constructors.
+      - {id: target-16-cloud-api, path: "targets/target-16-cloud-api", type: source-dir, scope_bucket: cloud_api}

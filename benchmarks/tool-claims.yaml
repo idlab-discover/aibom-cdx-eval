@@ -1,0 +1,129 @@
+# What each source-scan tool CLAIMS to support, per T3 target scope.
+#
+# Source: the tool's own README / docs / website / AGENTS.md / CHANGELOG at the
+# pinned commit (paths relative to the tool checkout).  Used by analysis/graphs.py
+# (fig4b) to mark, for every tool x scope, whether a low recall is inside or
+# outside the tool's stated scope.
+#
+#   yes      the docs state support for this kind of code/file
+#   partial  the docs state support for part of it (some file types or patterns)
+#   no       the docs do not claim it, or explicitly exclude it
+#
+# `code` records what the scanner code actually walks/extracts (from reading the
+# source, not from running it), for the paper's discussion; the figure uses `claim`.
+#
+# Scopes: python = .py model loaders; mixed = JS/TS, notebooks, shell, Dockerfile,
+# markdown; config = YAML/JSON/TOML/.env/Dockerfile ENV; cloud_api = OpenAI /
+# Anthropic / LangChain / Bedrock / Azure model usage.
+# Reviewed 2026-10-01.
+
+aibomgen-cli:
+  python:
+    claim: yes
+    evidence: 'README.md:13 "scans a repository for Hugging Face model and dataset usage"; pkg/aibomgen/scanner/doc.go:4-7'
+    code: yes (from_pretrained, pipeline, hub downloads, InferenceClient, SentenceTransformer, LangChain HF loaders; multi-line calls)
+  mixed:
+    claim: yes
+    evidence: 'README.md:125 "...Python, YAML, JSON, Markdown, shell, Dockerfile, and JavaScript/TypeScript files"'
+    code: yes (JS/TS single-line only, notebooks, huggingface-cli in shell/Dockerfile, markdown front matter + body)
+  config:
+    claim: partial
+    evidence: 'README.md:125 names YAML and JSON only; TOML/.env not claimed'
+    code: partial (YAML/JSON keys, Dockerfile KEY=org/name; TOML, .env, requirements deliberately not scanned)
+  cloud_api:
+    claim: no
+    evidence: 'README.md:13 is Hugging Face-only; no OpenAI/Anthropic/Bedrock/Azure claim found'
+    code: no (all rules need an HF org/name ID)
+
+akumar-aibom:
+  python:
+    claim: partial
+    evidence: 'AGENTS.md:304-305 "Model classes (OpenAI, ChatOpenAI, ChatAnthropic, etc.)"; README.md:3 "Python/LangChain"'
+    code: partial (only OpenAI/ChatOpenAI/ChatAnthropic/Ollama/HuggingFaceHub constructors; no from_pretrained/pipeline)
+  mixed:
+    claim: yes
+    evidence: 'website/index.html:704 "Detect AI components in Python, Jupyter notebooks, JavaScript, TypeScript, Java, Go, and .NET"'
+    code: partial (notebooks; JS/TS only new OpenAI/Anthropic/ChatOpenAI/ChatAnthropic; no shell/markdown)
+  config:
+    claim: yes
+    evidence: 'AGENTS.md:313 "ConfigFileDetector ... Scans YAML, JSON, and .env files for: Model configuration keys"'
+    code: partial (only keys model / model_name; TOML unsupported)
+  cloud_api:
+    claim: partial
+    evidence: 'website/docs.html:1320 "Detects external model providers like OpenAI, Anthropic"'
+    code: partial (LangChain/OpenAI constructors; .create(model=), Bedrock, Azure not read)
+
+jorisbot-aibom:
+  python:
+    claim: yes
+    evidence: 'README.md:17 "scans your Python ML project"; README.md:120 "HuggingFace | Models & Datasets"'
+    code: partial (positional from_pretrained only)
+  mixed:
+    claim: no
+    evidence: 'README.md:138-140 FAQ "scans for Python files recursively"'
+    code: no (only *.py)
+  config:
+    claim: no
+    evidence: 'README.md:144 "It does not analyze virtual environments or parse dependencies from requirements.txt"'
+    code: no
+  cloud_api:
+    claim: yes
+    evidence: 'README.md:121-129 OpenAI, Anthropic "Models & API Usage", Vertex, Cohere, LangChain'
+    code: partial (model only from chat.completions.create / messages.create; LangChain import-level only)
+
+trusera-aibom:
+  python:
+    claim: yes
+    evidence: 'README.md:116 "Model References ... Code"; README.md:129 "25+ AI SDKs detected across Python, JavaScript..."'
+    code: partial (single-line from_pretrained; --deep adds commercial model-name literals)
+  mixed:
+    claim: partial
+    evidence: 'README.md:125 Jupyter notebooks; README.md:129 JS/TS; README.md:118 Docker images; no shell/markdown claim'
+    code: partial (notebooks; JS/TS from_pretrained only; Dockerfile FROM only)
+  config:
+    claim: partial
+    evidence: 'README.md:536-538 "configs, IaC", ".env secrets" (providers/endpoints/keys, not model IDs)'
+    code: partial (provider/endpoint/key detection; no model IDs from YAML/JSON/TOML/.env)
+  cloud_api:
+    claim: yes
+    evidence: 'README.md:114 LLM providers; README.md:119 "AWS Bedrock/SageMaker | Azure OpenAI/ML | Google Vertex AI"'
+    code: partial (model= on the same line as the call; no LangChain Ollama; Azure deployment not extracted)
+
+cdxgen-aibom:
+  # cdxgen 12.8.5, docs/AI_BOM.md (github.com/cdxgen/cdxgen); code paths are in
+  # tools/cdxgen/node_modules/@cyclonedx/cdxgen/lib/helpers/aiCollector.js
+  python:
+    claim: yes
+    evidence: 'docs/AI_BOM.md "AI inference services discovered from source or config"; Hugging Face models via purls/URLs'
+    code: yes (aiCollector.js:44 PYTHON_SOURCE_PATTERNS **/*.{py,pyw})
+  mixed:
+    claim: partial
+    evidence: 'docs/AI_BOM.md names agent frameworks incl. "the Vercel AI SDK" (JS) but no file-type list'
+    code: partial (aiCollector.js:43-46 JS/TS, notebooks, shell wrappers; no Dockerfile or markdown)
+  config:
+    claim: partial
+    evidence: 'docs/AI_BOM.md "prompt and model-routing config files"'
+    code: partial (aiCollector.js:48-49 only prompt/agent/ai directories, not general YAML/JSON/TOML/.env)
+  cloud_api:
+    claim: yes
+    evidence: 'docs/AI_BOM.md "OpenAI, Anthropic, Google, Azure OpenAI, Mistral, Cohere, DeepSeek, Groq, xAI/Grok, AWS Bedrock"'
+    code: yes (provider models emitted as machine-learning-model, e.g. openai / gpt-4o)
+
+hts-aibom:
+  # HTS AiBOM v0.2.0 (tools/hts-aibom @ b41a770)
+  python:
+    claim: yes
+    evidence: 'README.md:21-23 "AiBOM scans the artefacts where that evidence actually lives — source code, manifests, ..."'
+    code: partial (src/aibom/scanner.py:28-53 text extensions incl. .py; model rule model.identifier.pattern, no HF org/name loaders)
+  mixed:
+    claim: partial
+    evidence: 'README.md:21-23 "source code" (no languages named); no notebook claim'
+    code: partial (scanner.py:28-53 .js/.ts/.md/.sh and Dockerfile; no .ipynb)
+  config:
+    claim: partial
+    evidence: 'README.md:21-23 "manifests, Terraform / Helm / K8s" (dependency/IaC manifests)'
+    code: partial (scanner.py:44-51 .json/.yaml/.toml/.env read as text; Helm/K8s images, Terraform AI resources)
+  cloud_api:
+    claim: yes
+    evidence: 'README.md:18-20 "a verifiable inventory of every model, dataset, provider ... a codebase touches"; README.md:154 Terraform Bedrock/Vertex resources'
+    code: partial (commercial model-name pattern, e.g. "GPT-4o"; cloud accounts via separate scan-aws/azure/gcp)

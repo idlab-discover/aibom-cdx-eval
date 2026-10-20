@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "target": "target-15-cloud-api",
+  "models": [
+    {
+      "id": "BAAI/bge-small-en-v1.5",
+      "scope": "python_literal",
+      "file": "chain.py",
+      "pattern": "SentenceTransformer(\"BAAI/bge-small-en-v1.5\")"
+    },
+    {
+      "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "scope": "python_literal",
+      "file": "chain.py",
+      "pattern": "AutoTokenizer.from_pretrained(\"cross-encoder/ms-marco-MiniLM-L-6-v2\")",
+      "aliases": [
+        "cross-encoder/ms-marco-MiniLM-L6-v2"
+      ]
+    },
+    {
+      "id": "gpt-4o",
+      "scope": "python_literal",
+      "file": "chain.py",
+      "pattern": "ChatOpenAI(model_name=\"gpt-4o\")"
+    },
+    {
+      "id": "claude-3-haiku-20240307",
+      "scope": "python_literal",
+      "file": "chain.py",
+      "pattern": "ChatAnthropic(model=\"claude-3-haiku-20240307\")"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "wikimedia/wikipedia",
+      "kind": "dataset (load_dataset)",
+      "file": "chain.py"
+    }
+  ]
+}

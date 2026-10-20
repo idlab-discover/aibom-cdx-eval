@@ -1,0 +1,32 @@
+[project]
+name = "aibom-cdx-eval"
+version = "0.1.0"
+description = "AI Bill of Materials CycloneDX evaluation framework for AIBOM generators"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "jsonschema>=4.23",
+    "matplotlib>=3.10",
+    "numpy>=2.0",
+    "pyyaml>=6.0",
+    "referencing>=0.30",
+    "rich>=13.0",
+]
+
+[project.scripts]
+eval = "orchestrator.run_benchmark:cli"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["orchestrator", "runners", "scoring", "analysis"]

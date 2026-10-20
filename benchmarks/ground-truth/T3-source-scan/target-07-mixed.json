@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "target": "target-07-mixed",
+  "models": [
+    {
+      "id": "google/flan-t5-large",
+      "scope": "notebook_literal",
+      "file": "experiment.ipynb",
+      "pattern": "Jupyter cell AutoModel.from_pretrained"
+    },
+    {
+      "id": "sentence-transformers/all-roberta-large-v1",
+      "scope": "notebook_literal",
+      "file": "experiment.ipynb",
+      "pattern": "Jupyter cell SentenceTransformer"
+    },
+    {
+      "id": "stabilityai/stable-diffusion-2-1",
+      "scope": "notebook_literal",
+      "file": "experiment.ipynb",
+      "pattern": "Jupyter cell DiffusionPipeline.from_pretrained"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "rajpurkar/squad",
+      "kind": "dataset (load_dataset)",
+      "file": "experiment.ipynb"
+    }
+  ]
+}

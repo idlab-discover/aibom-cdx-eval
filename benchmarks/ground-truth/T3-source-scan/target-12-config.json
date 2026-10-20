@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "target": "target-12-config",
+  "models": [
+    {
+      "id": "meta-llama/Llama-2-7b-chat-hf",
+      "scope": "dockerfile_literal",
+      "file": "Dockerfile",
+      "pattern": "Dockerfile ARG MODEL_ID default"
+    },
+    {
+      "id": "sentence-transformers/all-mpnet-base-v2",
+      "scope": "dockerfile_literal",
+      "file": "Dockerfile",
+      "pattern": "Dockerfile ENV EMBEDDING_MODEL"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "pytorch/pytorch",
+      "kind": "container image",
+      "file": "Dockerfile"
+    }
+  ]
+}

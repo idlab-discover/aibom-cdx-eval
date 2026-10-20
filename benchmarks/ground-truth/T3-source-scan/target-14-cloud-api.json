@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "target": "target-14-cloud-api",
+  "models": [
+    {
+      "id": "gpt-4o",
+      "scope": "python_literal",
+      "file": "app.py",
+      "pattern": "ChatOpenAI(model_name=\"gpt-4o\")"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "scope": "python_literal",
+      "file": "app.py",
+      "pattern": "ChatOpenAI(model_name=\"gpt-4o-mini\")"
+    },
+    {
+      "id": "claude-3-5-sonnet-20241022",
+      "scope": "python_literal",
+      "file": "app.py",
+      "pattern": "ChatAnthropic(model=\"claude-3-5-sonnet-20241022\")"
+    },
+    {
+      "id": "llama3.2",
+      "scope": "python_literal",
+      "file": "app.py",
+      "pattern": "Ollama(model=\"llama3.2\")"
+    }
+  ],
+  "neutral": [],
+  "not_models": []
+}

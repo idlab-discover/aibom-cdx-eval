@@ -1,0 +1,8 @@
+{
+  "name": "ai-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "@xenova/transformers": "^2.17.0"
+  },
+  "repository": "acme-corp/ai-app"
+}

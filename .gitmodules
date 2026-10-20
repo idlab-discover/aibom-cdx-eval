@@ -1,0 +1,37 @@
+[submodule "tools/aibom-generator"]
+	path = tools/aibom-generator
+	url = https://github.com/GenAI-Security-Project/aibom-generator.git
+	ignore = dirty
+[submodule "tools/akumar-aibom"]
+	path = tools/akumar-aibom
+	url = https://github.com/akumar0205/AIBOM.git
+	ignore = dirty
+[submodule "tools/jorisbot-aibom"]
+	path = tools/jorisbot-aibom
+	url = https://github.com/jorisbot288-boop/aibom.git
+	ignore = dirty
+[submodule "tools/lab700xorg-aisbom"]
+	path = tools/lab700xorg-aisbom
+	url = https://github.com/Lab700xOrg/aisbom.git
+	ignore = dirty
+[submodule "tools/trusera-aibom"]
+	path = tools/trusera-aibom
+	url = https://github.com/Trusera/ai-bom.git
+	ignore = dirty
+[submodule "tools/hts-aibom"]
+	path = tools/hts-aibom
+	url = https://github.com/Hts-Public-Fork/aibom.git
+	ignore = dirty
+[submodule "tools/aibomgen-cli"]
+	path = tools/aibomgen-cli
+	url = https://github.com/idlab-discover/aibomgen-cli.git
+	ignore = dirty
+[submodule "tools/ALOHA"]
+	path = tools/ALOHA
+	url = https://github.com/MSR4SBOM/ALOHA.git
+	ignore = dirty
+[submodule "tools/cdxgen"]
+	path = tools/cdxgen
+	url = https://github.com/cdxgen/cdxgen.git
+	shallow = true
+	ignore = dirty

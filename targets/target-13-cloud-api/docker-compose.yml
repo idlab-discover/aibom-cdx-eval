@@ -1,0 +1,14 @@
+version: "3.9"
+services:
+  api:
+    build: ./api
+    environment:
+      - HF_INFERENCE_MODEL=mistralai/Mistral-7B-Instruct-v0.2
+      - AZURE_OPENAI_DEPLOYMENT=gpt-4o
+  worker:
+    build: ./worker
+    environment:
+      - BEDROCK_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
+      - EMBED_MODEL=sentence-transformers/all-MiniLM-L12-v2
+  cache:
+    image: redis/redis-stack-server:latest

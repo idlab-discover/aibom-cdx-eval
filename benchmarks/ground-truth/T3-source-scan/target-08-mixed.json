@@ -1,0 +1,53 @@
+{
+  "schema_version": 2,
+  "target": "target-08-mixed",
+  "models": [
+    {
+      "id": "meta-llama/Meta-Llama-3-8B-Instruct",
+      "scope": "yaml_literal",
+      "file": "backend/model_registry.py",
+      "pattern": "REGISTRY dict + YAML + Dockerfile"
+    },
+    {
+      "id": "sentence-transformers/all-MiniLM-L6-v2",
+      "scope": "yaml_literal",
+      "file": "backend/model_registry.py",
+      "pattern": "REGISTRY dict + YAML"
+    },
+    {
+      "id": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+      "scope": "python_variable",
+      "file": "backend/model_registry.py",
+      "pattern": "REGISTRY dict",
+      "aliases": [
+        "cross-encoder/ms-marco-MiniLM-L12-v2"
+      ]
+    },
+    {
+      "id": "openai/clip-vit-base-patch32",
+      "scope": "python_variable",
+      "file": "backend/model_registry.py",
+      "pattern": "REGISTRY dict"
+    },
+    {
+      "id": "Xenova/gpt2",
+      "scope": "js_literal",
+      "file": "frontend/config.ts",
+      "pattern": "TypeScript const"
+    },
+    {
+      "id": "Xenova/all-MiniLM-L6-v2",
+      "scope": "js_literal",
+      "file": "frontend/config.ts",
+      "pattern": "TypeScript const"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "nvidia/cuda",
+      "kind": "container image",
+      "file": "infra/values.yaml"
+    }
+  ]
+}

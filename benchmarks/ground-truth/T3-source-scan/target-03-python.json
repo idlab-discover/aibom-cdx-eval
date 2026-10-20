@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "target": "target-03-python",
+  "models": [
+    {
+      "id": "facebook/bart-large-cnn",
+      "scope": "python_literal",
+      "file": "app.py",
+      "pattern": "ChatAnthropic(model=)"
+    },
+    {
+      "id": "openai/whisper-base",
+      "scope": "python_literal",
+      "file": "app.py",
+      "pattern": "HuggingFaceHub(model_name=)"
+    },
+    {
+      "id": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+      "scope": "python_variable",
+      "file": "classifier.py",
+      "pattern": "AutoModelForSequenceClassification.from_pretrained"
+    }
+  ],
+  "neutral": [],
+  "not_models": [
+    {
+      "id": "acme-ml/support-tickets",
+      "kind": "dataset (load_dataset)",
+      "file": "classifier.py"
+    }
+  ]
+}
