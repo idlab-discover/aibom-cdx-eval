@@ -1,5 +1,6 @@
 """
-Base runner: timing, memory capture, retry logic, and result serialization.
+Base runner: runs a tool (timing, retries) and records the run's facts in metrics.json;
+``score_job`` computes the scores of a finished job (used by `eval score`).
 All per-tool runners inherit from BaseRunner.
 """
 
@@ -16,6 +17,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -24,12 +26,12 @@ from typing import Any
 
 from constants import (
     DETERMINISM_ENV,
+    EC_SUCCESS,
     EC_SUCCESS_EMPTY,
     EVAL_ROOT,
     K_DETECTED_IDS,
     K_ERROR_CLASS,
     K_UNIDENTIFIED,
-    K_HUB_REQUESTS,
     METRICS_FILENAME,
     RUN_MODEL_ID,
     RUN_SOURCE_SCAN,
@@ -55,14 +57,13 @@ class RunResult:
     timestamp_start: str
     timestamp_end: str
     duration_seconds: float
-    peak_memory_mb: float | None
     exit_code: int
     success: bool
     retries: int
     raw_output_path: str | None
     error_message: str | None
-    scores: dict[str, Any]
     total_wall_seconds: float = 0.0
+    hub_requests: int | None = None   # model-id jobs: Hub requests counted around the job
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -70,8 +71,7 @@ class RunResult:
     def write(self, output_dir: Path) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / METRICS_FILENAME
-        with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
+        write_json_atomic(path, self.to_dict())
         return path
 
 
@@ -84,7 +84,7 @@ class BaseRunner(abc.ABC):
 
     Optional overrides:
       - locate_output(output_dir) → Path | None
-      - score(output_path, input_spec) → dict
+      - cdx_output_paths(tool_output_dir) / claims_from_output_dir(tool_output_dir)
       - working_dir() → Path
       - get_version() → (str, str)
     """
@@ -145,8 +145,8 @@ class BaseRunner(abc.ABC):
         """
 
     def after_success(self, tool_output_dir: Path) -> None:
-        """Called once after the tool exited 0, before scoring.  Override for extra
-        steps such as converting the output to CycloneDX."""
+        """Called once after the tool exited 0, before the run is judged.  Override for
+        extra tool steps such as converting the output to CycloneDX."""
 
     def post_run(self) -> None:
         """Called once after the last job of a run (e.g. to undo local patches)."""
@@ -209,48 +209,34 @@ class BaseRunner(abc.ABC):
         the CycloneDX BOMs.  Unidentified claims name no model and are not scored."""
         return model_claims_cyclonedx_many(cls.cdx_output_paths(tool_output_dir))
 
-    def score(self) -> dict[str, Any]:
-        """Scores of a successful run: CycloneDX quality of every BOM (T4) and, for a
-        scan, the detections matched against the target's ground truth (T3)."""
-        scores = score_cdx_paths(self.cdx_output_paths(self.tool_output_dir))
+    def score(self, tool_output_dir: Path, dataset_id: str) -> dict[str, Any]:
+        """CycloneDX quality of every BOM (T4) and, for a scan, the detections matched
+        against the target's ground truth (T3)."""
+        scores = score_cdx_paths(self.cdx_output_paths(tool_output_dir))
         if self.run_type == RUN_SOURCE_SCAN:
-            detected, unidentified = self.claims_from_output_dir(self.tool_output_dir)
+            detected, unidentified = self.claims_from_output_dir(tool_output_dir)
             scores[K_DETECTED_IDS] = detected
             scores[K_UNIDENTIFIED] = unidentified
-            gt_path = ground_truth_path(self.dataset_id)
+            gt_path = ground_truth_path(dataset_id)
             if gt_path.exists():
                 scores.update(score_discovery(detected, gt_path))
         return scores
 
-    def evaluate(self, exit_code: int, log_tail: str, duration: float
-                 ) -> tuple[bool, str | None, str | None, dict[str, Any]]:
-        """Judge a finished run from its exit code and its files in
-        ``self.tool_output_dir``: (success, error message or None, raw output path,
-        scores)."""
-        success = exit_code == 0
-        error_msg: str | None = None
-        raw_output_path: str | None = None
-        scores: dict[str, Any] = {}
-        found = self.locate_output(self.tool_output_dir)
-        if success and found:
-            try:
-                raw_output_path = str(found.relative_to(EVAL_ROOT))
-            except ValueError:
-                raw_output_path = str(found)
-            scores.update(score_performance(found, duration))
-            scores.update(self.score())
-            scores[K_ERROR_CLASS] = classify_error(exit_code, log_tail, found, True)
-        elif success and self.empty_output_is_valid():
-            # Scan tool that found nothing: a valid result with zero detections.
-            scores.update(self.score())
-            scores[K_ERROR_CLASS] = EC_SUCCESS_EMPTY
+    def score_job(self, job_dir: Path, record: dict) -> dict[str, Any]:
+        """Every score of one finished job, from its stored files and the run facts in
+        ``record`` (its metrics.json).  The one place scores are computed (`eval score`)."""
+        tool_output_dir = job_dir / "tool_output"
+        found = self.locate_output(tool_output_dir)
+        if not record.get("success"):
+            log_tail = _read_tail(job_dir / "stderr.log", 2000) + "\n" + _read_tail(job_dir / "stdout.log", 2000)
+            return {K_ERROR_CLASS: classify_error(record.get("exit_code", -1), log_tail, found, False)}
+        scores = self.score(tool_output_dir, record.get("dataset", ""))
+        if found:
+            scores.update(score_performance(found, record.get("duration_seconds") or 0.0))
+            scores[K_ERROR_CLASS] = EC_SUCCESS
         else:
-            if success:
-                success = False
-                error_msg = ("Process exited successfully but no output artifact was found "
-                             f"in {self.tool_output_dir}")
-            scores[K_ERROR_CLASS] = classify_error(exit_code, log_tail, found, False)
-        return success, error_msg, raw_output_path, scores
+            scores[K_ERROR_CLASS] = EC_SUCCESS_EMPTY   # scan tool that found nothing
+        return scores
 
     # ------------------------------------------------------------------ #
     # Public entry point                                                   #
@@ -265,8 +251,8 @@ class BaseRunner(abc.ABC):
         repeat_index: int = 1,
     ) -> RunResult:
         """
-        Execute the tool for one (input_spec, dataset_id) pair, capture timing +
-        memory, retry on failure, write metrics.json and return the RunResult.
+        Execute the tool for one (input_spec, dataset_id) pair, capture timing,
+        retry on failure, write metrics.json and return the RunResult.
         """
         max_retries = int(self.tool_config.get("max_retries", self.MAX_RETRIES))
         timeout = int(self.tool_config.get("timeout_seconds", self.TIMEOUT))
@@ -279,8 +265,6 @@ class BaseRunner(abc.ABC):
 
         tool_output_dir = output_dir / "tool_output"
         tool_output_dir.mkdir(exist_ok=True)
-        self.tool_output_dir = tool_output_dir
-        self.dataset_id = dataset_id
 
         # Subprocess environment: HF_TOKEN (shell or .env) under the other names tools read.
         run_env = dict(os.environ)
@@ -294,20 +278,11 @@ class BaseRunner(abc.ABC):
 
         stdout_log = output_dir / "stdout.log"
         stderr_log = output_dir / "stderr.log"
-        time_stats_file = output_dir / "time_stats.txt"
-
-        # Wrap with /usr/bin/time -v -o <file> for peak RSS measurement
-        has_gnu_time = shutil.which("/usr/bin/time") is not None
-        if has_gnu_time:
-            actual_cmd = ["/usr/bin/time", "-v", "-o", str(time_stats_file)] + cmd
-        else:
-            actual_cmd = cmd
 
         hub_before, _ = self._hub_counters_before(run_env)    # before ts_start: never timed
         ts_start = datetime.datetime.now(datetime.timezone.utc)
         exit_code = -1
         error_msg: str | None = None
-        peak_memory_mb: float | None = None
         retries = 0
         attempt_duration = 0.0
 
@@ -329,33 +304,18 @@ class BaseRunner(abc.ABC):
             shutil.rmtree(tool_output_dir, ignore_errors=True)
             tool_output_dir.mkdir(parents=True)
 
-            t0 = time.monotonic()
+            t0 = time.perf_counter()
             try:
                 with open(stdout_log, "w") as fout, open(stderr_log, "w") as ferr:
-                    # Own process group: a timeout kills the tool and all its children
-                    # (/usr/bin/time and `uv run` would otherwise leave the tool running).
-                    proc = subprocess.Popen(
-                        actual_cmd,
-                        cwd=str(self.working_dir()),
-                        env=run_env,
-                        stdout=fout,
-                        stderr=ferr,
-                        start_new_session=True,
-                    )
-                    try:
-                        proc.wait(timeout=timeout)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                        proc.wait()
-                        raise
-                attempt_duration = time.monotonic() - t0
+                    proc = run_timed(cmd, timeout, cwd=str(self.working_dir()),
+                                     env=run_env, stdout=fout, stderr=ferr)
+                attempt_duration = time.perf_counter() - t0
                 exit_code = proc.returncode
                 exit_code = self.adjust_exit_code(exit_code, stdout_log, stderr_log)
 
-                if has_gnu_time and time_stats_file.exists():
-                    peak_memory_mb = _parse_gnu_time_memory(time_stats_file)
-
-                if exit_code == 0:
+                # Exit 0 without the expected output is a failure like any other: retry it.
+                if exit_code == 0 and (self.empty_output_is_valid()
+                                       or self.locate_output(tool_output_dir)):
                     break
 
                 error_msg = _build_error_message(stderr_log, stdout_log)
@@ -364,14 +324,14 @@ class BaseRunner(abc.ABC):
                     break
 
             except subprocess.TimeoutExpired:
-                attempt_duration = time.monotonic() - t0
+                attempt_duration = time.perf_counter() - t0
                 exit_code = -9
                 error_msg = f"Timed out after {timeout}s (attempt {attempt + 1})"
                 if retry_on_timeout and attempt < max_retries:
                     continue
                 break
             except Exception as exc:
-                attempt_duration = time.monotonic() - t0
+                attempt_duration = time.perf_counter() - t0
                 exit_code = -1
                 error_msg = str(exc)
                 break
@@ -384,18 +344,25 @@ class BaseRunner(abc.ABC):
 
         if exit_code == 0:
             self.after_success(tool_output_dir)
-        log_tail = _read_tail(stderr_log, 2000) + "\n" + _read_tail(stdout_log, 2000)
-        success, eval_error, raw_output_path, scores = self.evaluate(exit_code, log_tail, duration)
-        if self.run_type == RUN_MODEL_ID:
-            # A retry's own budget checks add probe requests: only single-attempt jobs count.
-            scores[K_HUB_REQUESTS] = (
-                hub_requests_between(hub_before, hub_counters(run_env.get("HF_TOKEN")))
-                if retries == 0 else None
-            )
-        if eval_error:
-            error_msg = eval_error
+        # Success = exit 0 with an output artifact (or a valid empty scan); `eval score` scores it.
+        found = self.locate_output(tool_output_dir)
+        success = exit_code == 0 and (found is not None or self.empty_output_is_valid())
+        raw_output_path: str | None = None
+        if success and found:
+            try:
+                raw_output_path = str(found.relative_to(EVAL_ROOT))
+            except ValueError:
+                raw_output_path = str(found)
+        elif exit_code == 0 and not success:
+            error_msg = f"Process exited successfully but no output artifact was found in {tool_output_dir}"
         elif not success and error_msg is None:
             error_msg = _build_error_message(stderr_log, stdout_log)
+        if success:
+            error_msg = None
+        hub_requests = None
+        if self.run_type == RUN_MODEL_ID and retries == 0:
+            # A retry's own budget checks add probe requests: only single-attempt jobs count.
+            hub_requests = hub_requests_between(hub_before, hub_counters(run_env.get("HF_TOKEN")))
 
         # Unconditional cleanup of tool side-effect files.  A failure is reported, not
         # fatal: a leftover file could contaminate the next tool's scan of the target.
@@ -415,14 +382,13 @@ class BaseRunner(abc.ABC):
             timestamp_start=ts_start.isoformat(),
             timestamp_end=ts_end.isoformat(),
             duration_seconds=duration,
-            peak_memory_mb=peak_memory_mb,
             exit_code=exit_code,
             success=success,
             retries=retries,
             raw_output_path=raw_output_path,
             error_message=error_msg,
-            scores=scores,
             total_wall_seconds=total_wall,
+            hub_requests=hub_requests,
         )
         result.write(output_dir)
         return result
@@ -431,6 +397,40 @@ class BaseRunner(abc.ABC):
 # ------------------------------------------------------------------ #
 # Private helpers                                                      #
 # ------------------------------------------------------------------ #
+
+def write_json_atomic(path: Path, data: Any) -> None:
+    """Write JSON via a temp file + rename: a crash never leaves a half-written file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, path)
+
+
+def run_timed(cmd: list[str], timeout: float, **popen_kwargs) -> subprocess.Popen:
+    """Run ``cmd`` in its own process group and wait for it; raise TimeoutExpired
+    after killing the whole group (`uv run` would otherwise leave
+    the tool running).  A blocking wait returns the moment the process exits:
+    ``Popen.wait(timeout=...)`` polls with sleeps of up to 50 ms, which put every
+    duration on a 50 ms grid."""
+    proc = subprocess.Popen(cmd, start_new_session=True, **popen_kwargs)
+    fired = threading.Event()
+
+    def kill() -> None:
+        fired.set()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    timer = threading.Timer(timeout, kill)
+    timer.start()
+    try:
+        proc.wait()
+    finally:
+        timer.cancel()
+    if fired.is_set():
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    return proc
+
 
 @functools.cache
 def package_version(path: Path) -> str:
@@ -539,19 +539,6 @@ def hub_requests_between(before: list[tuple[int, int]] | None,
     diffs = [rb - ra - 1 for (rb, _), (ra, _) in zip(before, after)]
     # A counter that went up (seen on sub-second jobs) means the reading is unreliable.
     return None if any(d < 0 for d in diffs) else sum(diffs)
-
-
-def _parse_gnu_time_memory(time_file: Path) -> float | None:
-    """Parse peak RSS (in MB) from /usr/bin/time -v -o <file> output."""
-    try:
-        text = time_file.read_text()
-        for line in text.splitlines():
-            if "Maximum resident set size" in line:
-                kb = float(line.split(":")[-1].strip())
-                return round(kb / 1024, 2)
-    except Exception:
-        pass
-    return None
 
 
 def _read_tail(path: Path, n: int) -> str:

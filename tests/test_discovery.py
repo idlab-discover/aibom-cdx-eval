@@ -28,7 +28,15 @@ def test_org_is_required_when_ground_truth_has_one():
     # Xenova/bert-base-uncased must NOT be credited for google-bert/bert-base-uncased
     m = match_detections(["Xenova/bert-base-uncased"], gt(["google-bert/bert-base-uncased"]))
     assert m.tp_ids == () and m.fp_ids == ("Xenova/bert-base-uncased",)
-    assert match_detections(["bert-base-uncased"], gt(["google-bert/bert-base-uncased"])).tp_ids == ()
+
+
+def test_bare_detection_matches_a_unique_org_name():
+    # symmetric with the rule below: a detection without an org matches by name …
+    m = match_detections(["Mistral-7B-v0.3"], gt(["mistralai/Mistral-7B-v0.3"]))
+    assert m.tp_ids == ("mistralai/Mistral-7B-v0.3",) and not m.fp_ids
+    # … but only when exactly one ground-truth entry has that name
+    m = match_detections(["bert-base-uncased"], gt(["google-bert/bert-base-uncased", "Xenova/bert-base-uncased"]))
+    assert m.tp_ids == () and m.fp_ids == ("bert-base-uncased",)
 
 
 def test_name_only_match_when_ground_truth_has_no_org():

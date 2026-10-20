@@ -1,10 +1,11 @@
 """
-run_benchmark.py — main orchestration CLI for the aibomgen-cli evaluation framework.
+run_benchmark.py — main orchestration CLI for AIBOM-CDX-Eval.
 
 Subcommands:
   run        Run all jobs on the current machine (sequential).
   status     Show status of the latest run (or a specific run via --run-id).
-  aggregate  Aggregate metrics for one run and generate figures.
+  score      Score every job of a run from its stored outputs (after run, before aggregate).
+  aggregate  Aggregate the scores of one run and generate figures.
   resolve-aliases  Add Hub redirect targets to the T3 ground truth as aliases.
 
 Every command takes --results-dir, the results root (default results/):
@@ -15,6 +16,7 @@ Quick start:
   uv run eval run --run-id my-run-001 --repeats 3
   uv run eval run --run-id my-run-001 --background
   uv run eval status --run-id my-run-001
+  uv run eval score --run-id my-run-001
   uv run eval aggregate --run-id my-run-001
 """
 
@@ -23,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import random
 import statistics
 import subprocess
 import sys
@@ -80,7 +83,7 @@ console = Console()
 
 @click.group()
 def cli() -> None:
-    """aibomgen-cli evaluation framework."""
+    """AIBOM-CDX-Eval: AI Bill of Materials CycloneDX evaluation framework."""
 
 
 _RESULTS_DIR_OPTION = click.option(
@@ -99,12 +102,6 @@ _RESULTS_DIR_OPTION = click.option(
     default=None,
     type=int,
     help="Cap the number of model IDs per model-id-list dataset (default: from config).",
-)
-@click.option(
-    "--cooldown",
-    default=None,
-    type=float,
-    help="Extra fixed wait between job groups in minutes (default: 0; the Hub budget is already checked before every job).",
 )
 @click.option(
     "--repeats",
@@ -126,7 +123,6 @@ def run(
     tools: str | None,
     run_types: str | None,
     limit: int | None,
-    cooldown: float | None,
     n: int,
     background: bool,
 ) -> None:
@@ -157,7 +153,6 @@ def run(
         cfg=cfg,
         tools=tools,
         run_types=run_types,
-        cooldown=cooldown,
         limit=limit,
         n=n,
     )
@@ -178,6 +173,27 @@ def status(run_id: str | None, results_dir: Path) -> None:
         console.print(f"[dim]Using latest run: {run_id}[/dim]")
 
     _status_run(run_id, results_path)
+
+
+@cli.command("score")
+@click.option("--run-id", default=None, help="Run ID to score (default: the latest run).")
+@_RESULTS_DIR_OPTION
+def score(run_id: str | None, results_dir: Path) -> None:
+    """Score every job of a run from its stored outputs and logs, with the current
+    scorers and ground truth (writes scores.json next to each metrics.json; run facts
+    are never changed).  Run it after `eval run` and again after any scoring change."""
+    from scoring.score_run import score_run
+
+    runs_dir = results_dir / "runs"
+    run_id = run_id or latest_run_id(runs_dir)
+    run_dir = runs_dir / run_id if run_id else None
+    if run_dir is None or not run_dir.exists():
+        click.echo(f"Run not found: {run_dir or runs_dir}", err=True)
+        sys.exit(1)
+    _claim_run(run_dir, write=False)    # a live run is still writing jobs
+    scored, skipped = score_run(run_dir)
+    console.print(f"[green]Scored[/green] {scored} jobs of {run_id}" + (f" ({skipped} skipped)" if skipped else ""))
+    console.print(f"Next: uv run eval aggregate --run-id {run_id}")
 
 
 @cli.command("aggregate")
@@ -322,20 +338,20 @@ def _measure_baseline(runner, samples_n: int) -> dict:
     + imports) that every real job of that tool also pays.  One warm-up call is
     discarded; the median of ``samples_n`` calls is reported.
     """
+    from runners.base_runner import run_timed
+
     cmd = runner.baseline_command()
     samples: list[float] = []
     exit_codes: list[int] = []
     for i in range(samples_n + 1):
-        t0 = time.monotonic()
+        t0 = time.perf_counter()
         try:
-            proc = subprocess.run(
-                cmd, cwd=str(runner.working_dir()), env=dict(os.environ),
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300,
-            )
+            proc = run_timed(cmd, 300, cwd=str(runner.working_dir()), env=dict(os.environ),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             code = proc.returncode
         except Exception:
             code = -1
-        elapsed = time.monotonic() - t0
+        elapsed = time.perf_counter() - t0
         if i > 0:                       # discard the warm-up call
             samples.append(round(elapsed, 4))
             exit_codes.append(code)
@@ -369,7 +385,6 @@ def _run_once(
     cfg: dict,
     tools: str | None,
     run_types: str | None,
-    cooldown: float | None,
     limit: int | None,
     n: int,
 ) -> None:
@@ -411,14 +426,9 @@ def _run_once(
     )
 
     done = failed = 0
-    inter_group_wait = int((cooldown if cooldown is not None else 0.0) * 60)
 
-    groups = [
-        (group, list(grp_jobs))
-        for group, grp_jobs in groupby(pending, key=lambda j: j["group"])
-    ]
-
-    for group_idx, (group, group_jobs) in enumerate(groups):
+    for group, grp_jobs in groupby(pending, key=lambda j: j["group"]):
+        group_jobs = list(grp_jobs)
         console.print(
             f"\n[bold cyan]-- {group}[/bold cyan] "
             f"[dim]({len(group_jobs)} job(s))[/dim]"
@@ -439,13 +449,11 @@ def _run_once(
                     f"  [red]FAIL[/red] {_job_label(job)} -- {result.error_message or 'unknown error'}{retry_note}"
                 )
 
-        if group_idx < len(groups) - 1:
-            _wait_between_groups(console, inter_group_wait)
-
     _run_post_hooks(jobs)
     console.print(
         f"\n[bold]Done:[/bold] {done} succeeded, {failed} failed, {skipped} skipped."
     )
+    console.print(f"Next: uv run eval score --run-id {run_id}")
 
 
 def _claim_run(run_dir: Path, write: bool = True) -> None:
@@ -506,7 +514,9 @@ def _build_jobs(
     n: int,
 ) -> list[dict]:
     """Build the flat job list (repeats expand model-id jobs only) in execution order:
-    one round = every tool over every input, then the next repeat; scans last."""
+    one round = every tool over every input, then the next repeat; scans last.  The tool
+    order within one (round, input) is shuffled with a fixed seed, so no tool always
+    goes first."""
     tool_ids = set(tool_filter.split(",")) if tool_filter else None
     run_type_ids = set(run_type_filter.split(",")) if run_type_filter else None
 
@@ -514,7 +524,7 @@ def _build_jobs(
     run_types_cfg = cfg.get("run_types", {})
     tools_cfg = cfg.get("tools", {})
 
-    for tool_idx, (tool_id, tool_cfg) in enumerate(tools_cfg.items()):
+    for tool_id, tool_cfg in tools_cfg.items():
         if tool_ids and tool_id not in tool_ids:
             continue
 
@@ -539,7 +549,8 @@ def _build_jobs(
                         jobs.append(
                             {
                                 "group": f"{run_type} / round {repeat_index}",
-                                "_sort": (block, repeat_index, dataset_idx, input_idx, tool_idx),
+                                "_sort": (block, repeat_index, dataset_idx, input_idx,
+                                          random.Random(f"{repeat_index}/{item}/{tool_id}").random()),
                                 "tool": tool_id,
                                 "run_type": run_type,
                                 "dataset": dataset_id,
@@ -606,23 +617,6 @@ def _job_succeeded(run_dir: Path, job: dict) -> bool:
         return bool(json.loads(path.read_text()).get("success"))
     except (OSError, ValueError):
         return False
-
-
-def _wait_between_groups(con: Console, seconds: float) -> None:
-    mins_display = seconds / 60
-    con.print(
-        f"\n[bold yellow]Cooldown {mins_display:.1f}m between groups "
-        f"(HF rate-limit guard)[/bold yellow]"
-    )
-    remaining = seconds
-    while remaining > 0:
-        mins, secs = divmod(int(remaining), 60)
-        con.print(f"  [dim]Waiting {mins}:{secs:02d} ...[/dim]", end="\r")
-        sleep_for = min(30, remaining)
-        time.sleep(sleep_for)
-        remaining -= sleep_for
-    con.print(" " * 40, end="\r")
-    con.print("[dim]  Cooldown done -- starting next group.[/dim]\n")
 
 
 def _job_label(job: dict) -> str:

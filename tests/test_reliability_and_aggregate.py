@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from scoring.aggregate import _build_summary
 from scoring.score_reliability import classify_error
 
@@ -92,17 +94,13 @@ def test_tables_and_report_are_written(tmp_path):
     assert "### T1: performance" in report and "### T3: model discovery" in report
 
 
-def test_cdxgen_model_id_bom_without_model_is_no_output(tmp_path):
-    # cdxgen exits 0 with an empty BOM for a model it cannot resolve
+def test_cdxgen_bom_without_model_counts_like_any_tool(tmp_path):
+    # cdxgen exits 0 with an empty BOM for a model it cannot resolve: a valid BOM, as for lab700xorg
     from runners.run_cdxgen_aibom import CdxgenAibomRunner
     bom = tmp_path / "aibom.cdx.json"
-    t1 = CdxgenAibomRunner({"id": "cdxgen-aibom"}, "model-id")
-    t3 = CdxgenAibomRunner({"id": "cdxgen-aibom"}, "source-scan")
     bom.write_text('{"metadata": {"component": {"type": "application"}}, "components": []}')
-    assert t1.locate_output(tmp_path) is None
-    assert t3.locate_output(tmp_path) == bom          # T3: an empty scan is a valid result
-    bom.write_text('{"components": [{"type": "machine-learning-model", "name": "bert"}]}')
-    assert t1.locate_output(tmp_path) == bom
+    for run_type in ("model-id", "source-scan"):
+        assert CdxgenAibomRunner({"id": "cdxgen-aibom"}, run_type).locate_output(tmp_path) == bom
 
 
 def test_is_gated_only_for_auth_failures():
@@ -118,7 +116,7 @@ def _fake_runner(tmp_path, script, run_type="model-id"):
 
     class Fake(BaseRunner):
         def build_command(self, input_spec, output_dir, run_env):
-            return ["sh", "-c", script]
+            return ["sh", "-c", script.replace("{out}", str(output_dir))]
 
         def get_version(self):
             return "0", "0"
@@ -153,40 +151,87 @@ def test_hub_budget_wait_and_request_count(tmp_path, monkeypatch):
     monkeypatch.setattr(br.time, "sleep", sleeps.append)
     # Low budget → wait t+2; then before (900) and after (890): 4 buckets × (10 − 1 probe) = 36.
     fake([[(5, 0)] * 4, [(900, 100)] * 4, [(890, 100)] * 4])
-    res = _fake_runner(tmp_path, "exit 0").run("r", "org/m", "d", tmp_path)
-    assert sleeps[0] == 2 and res.scores["hub_requests"] == 36
+    ok = "echo {} > {out}/bom.json"
+    res = _fake_runner(tmp_path, ok).run("r", "org/m", "d", tmp_path)
+    assert sleeps[0] == 2 and res.hub_requests == 36
     # A window reset between the readings (t grows) → unknown.
     fake([[(900, 100)] * 4, [(990, 250)] * 4])
-    assert _fake_runner(tmp_path, "exit 0").run("r", "org/m", "d", tmp_path, 2).scores["hub_requests"] is None
+    assert _fake_runner(tmp_path, ok).run("r", "org/m", "d", tmp_path, 2).hub_requests is None
     n = len(probes)
     res = _fake_runner(tmp_path, "exit 0", "source-scan").run("r", str(tmp_path), "d", tmp_path)
-    assert len(probes) == n and "hub_requests" not in res.scores   # source scans never probe the Hub
+    assert len(probes) == n and res.hub_requests is None   # source scans never probe the Hub
 
 
 
-def test_ai_completeness_uses_ai_sections_and_counts_empty_scans_as_zero():
+def test_ai_completeness_skips_empty_scans_and_unions_ai_detail_for_breadth():
     from constants import (EC_SUCCESS_EMPTY, K_CDX_AI_BREADTH_V16, K_CDX_AI_COMPLETENESS_V16,
-                           K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_CONFORMANCE_VALID_V16, K_ERROR_CLASS)
+                           K_CDX_AI_DETAIL_V16, K_CDX_CONFORMANCE_VALID_V16, K_ERROR_CLASS)
     from scoring.aggregate import _aggregate_cdx
 
-    def rec(target, filled):
+    def rec(target, pct, filled):
         detail = {p: p in filled for p in ("metadata.timestamp", "components[].name",
-                                           "vulnerabilities[].id", "annotations[].text",
-                                           "metadata.tools.components[].name")}
+                                           "vulnerabilities[].id")}
         return {"tool": "t", "input_spec": target, "scores": {
-            K_CDX_CONFORMANCE_VALID_V16: True, K_CDX_COMPLETENESS_DETAIL_V16: detail}}
+            K_CDX_CONFORMANCE_VALID_V16: True, K_CDX_AI_COMPLETENESS_V16: pct,
+            K_CDX_AI_DETAIL_V16: detail}}
 
     summary = {}
     _aggregate_cdx(summary, "T4", [
-        rec("a", {"metadata.timestamp", "annotations[].text",     # annotations and
-                  "metadata.tools.components[].name"}),           # metadata.tools don't count: 1/3
-        rec("b", {"components[].name", "vulnerabilities[].id"}),  # 2/3
-        {"tool": "t", "input_spec": "c", "scores": {K_ERROR_CLASS: EC_SUCCESS_EMPTY}},  # empty scan: 0
+        rec("a", 100 / 3, {"metadata.timestamp"}),
+        rec("b", 200 / 3, {"components[].name", "vulnerabilities[].id"}),
+        {"tool": "t", "input_spec": "c", "scores": {K_ERROR_CLASS: EC_SUCCESS_EMPTY}},  # empty scan: not scored
     ])
     m = summary["t::T4"]["metrics"]
-    assert round(m[K_CDX_AI_COMPLETENESS_V16]["mean"], 2) == round((100 / 3 + 200 / 3 + 0) / 3, 2)
+    assert round(m[K_CDX_AI_COMPLETENESS_V16]["mean"], 2) == 50.0
     assert m[K_CDX_AI_BREADTH_V16]["mean"] == 100.0                # union covers all 3 AI paths
     assert summary["t::T4"]["n_no_bom"] == 1
+
+
+def _write_bom(path, components, meta_component=None, vulnerabilities=()):
+    bom = {"bomFormat": "CycloneDX", "specVersion": "1.6", "metadata": {"timestamp": "2026-01-01"},
+           "components": components, "vulnerabilities": list(vulnerabilities)}
+    if meta_component:
+        bom["metadata"]["component"] = meta_component
+    path.write_text(json.dumps(bom))
+    return path
+
+
+def test_ai_completeness_counts_only_ai_components_and_their_vulnerabilities(tmp_path):
+    from constants import K_CDX_AI_DETAIL_V16
+    from scoring.score_cdx_completeness import score_cdx_completeness
+
+    app = {"type": "application", "bom-ref": "app", "name": "x", "description": "the app"}
+    lib = {"type": "library", "bom-ref": "lib", "name": "transformers", "version": "4"}
+    vuln = {"id": "V1", "affects": [{"ref": "app"}]}
+    d = score_cdx_completeness(_write_bom(tmp_path / "a.json", [app, lib], vulnerabilities=[vuln]))[K_CDX_AI_DETAIL_V16]
+    assert not d["components[].description"] and not d["components[].version"]
+    assert not d["vulnerabilities[].id"]                       # affects a non-AI component
+    assert d["metadata.timestamp"]                             # metadata counts as before
+
+    fw = {"type": "framework", "bom-ref": "fw", "name": "LangChain", "description": "LLM framework"}
+    model = {"type": "machine-learning-model", "bom-ref": "m", "name": "org/m"}
+    d = score_cdx_completeness(_write_bom(tmp_path / "b.json", [fw], meta_component=model,
+                                          vulnerabilities=[{"id": "V2", "affects": [{"ref": "m"}]}]))[K_CDX_AI_DETAIL_V16]
+    assert d["components[].description"]                       # framework counts
+    assert d["components[].name"]                              # metadata.component, merged
+    assert d["vulnerabilities[].id"]                           # affects the ML metadata.component
+
+    d = score_cdx_completeness(_write_bom(tmp_path / "c.json", [], meta_component=app))[K_CDX_AI_DETAIL_V16]
+    assert d["components[].description"]                       # metadata.component counts whatever its type
+
+
+def test_ai_completeness_of_a_run_is_the_mean_over_its_boms(tmp_path):
+    from constants import K_CDX_AI_COMPLETENESS_V16, K_CDX_AI_DETAIL_V16
+    from scoring.score_cdx import score_cdx_paths
+    from scoring.score_cdx_completeness import score_cdx_completeness
+
+    rich = _write_bom(tmp_path / "rich.json", [{"type": "data", "bom-ref": "d", "name": "ds",
+                                                 "description": "a dataset", "version": "1"}])
+    bare = _write_bom(tmp_path / "bare.json", [])
+    one = [score_cdx_completeness(p) for p in (rich, bare)]
+    run = score_cdx_paths([rich, bare])
+    assert run[K_CDX_AI_COMPLETENESS_V16] == round(sum(o[K_CDX_AI_COMPLETENESS_V16] for o in one) / 2, 4)
+    assert run[K_CDX_AI_DETAIL_V16]["components[].version"]    # breadth detail stays the union
 
 
 def test_aloha_fails_only_when_it_wrote_no_bom(tmp_path):
@@ -209,15 +254,15 @@ def test_a_hub_counter_that_went_up_gives_no_count():
     assert hub_requests_between(before, [(890, 99)] * 3 + [(950, 99)]) is None
 
 
-def test_failed_scan_scores_zero_in_t4_like_an_empty_scan():
+def test_failed_scan_counts_as_no_bom_and_is_not_scored():
     from constants import (EC_CRASH, EC_SUCCESS_EMPTY, K_CDX_AI_COMPLETENESS_V16,
-                           K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_CONFORMANCE_VALID_V16, K_ERROR_CLASS,
+                           K_CDX_CONFORMANCE_VALID_V16, K_ERROR_CLASS,
                            TASK_T4_MODEL_ID, TASK_T4_SOURCE_SCAN)
     from scoring.aggregate import _aggregate_cdx
 
     recs = [
         {"tool": "t", "input_spec": "a", "scores": {K_CDX_CONFORMANCE_VALID_V16: True,
-                                                    K_CDX_COMPLETENESS_DETAIL_V16: {"components[].name": True}}},
+                                                    K_CDX_AI_COMPLETENESS_V16: 100.0}},
         {"tool": "t", "input_spec": "b", "scores": {K_ERROR_CLASS: EC_SUCCESS_EMPTY}},
         {"tool": "t", "input_spec": "c", "scores": {K_ERROR_CLASS: EC_CRASH}},
     ]
@@ -225,5 +270,50 @@ def test_failed_scan_scores_zero_in_t4_like_an_empty_scan():
     _aggregate_cdx(scan, TASK_T4_SOURCE_SCAN, recs)
     _aggregate_cdx(model_id, TASK_T4_MODEL_ID, recs)
     assert scan[f"t::{TASK_T4_SOURCE_SCAN}"]["n_no_bom"] == 2
-    assert round(scan[f"t::{TASK_T4_SOURCE_SCAN}"]["metrics"][K_CDX_AI_COMPLETENESS_V16]["mean"], 2) == 33.33
+    assert round(scan[f"t::{TASK_T4_SOURCE_SCAN}"]["metrics"][K_CDX_AI_COMPLETENESS_V16]["mean"], 2) == 100.0
     assert model_id[f"t::{TASK_T4_MODEL_ID}"]["n_no_bom"] == 1     # model ID: a failure is not a 0
+
+
+def test_completeness_ignores_model_placement_and_resolves_dataset_refs(tmp_path):
+    """T4 fairness rules: a model in metadata.component scores the same as one in
+    components[], and a dataset {"ref"} earns the referenced data component's fields."""
+    from scoring.score_cdx_completeness import score_cdx_completeness
+    model = {"type": "machine-learning-model", "bom-ref": "m", "name": "org/x", "version": "1",
+             "modelCard": {"modelParameters": {"datasets": [{"ref": "d"}]}}}
+    data = {"type": "data", "bom-ref": "d", "name": "ds", "description": "a dataset"}
+    in_meta = score_cdx_completeness(_write_bom(tmp_path / "a.json", [data], meta_component=model))
+    in_comps = score_cdx_completeness(_write_bom(tmp_path / "b.json", [model, data]))
+    dangling = score_cdx_completeness(_write_bom(tmp_path / "c.json", [], meta_component=model))
+    for v in ("v16", "v17"):
+        for kind in ("completeness", "ai_completeness", "model_completeness"):
+            key = f"cdx_{kind}_pct_{v}"
+            assert in_meta[key] == in_comps[key] > 0, key
+        assert in_meta[f"cdx_model_completeness_pct_{v}"] > dangling[f"cdx_model_completeness_pct_{v}"]
+
+
+def test_unparseable_bom_is_scored_not_dropped(tmp_path):
+    from scoring.score_cdx import score_cdx_paths
+    bad = tmp_path / "bom.json"
+    bad.write_text("{not json")
+    s = score_cdx_paths([bad])
+    assert s["cdx_conformance_valid_v16"] is False and s["cdx_ai_completeness_pct_v16"] == 0.0
+
+
+def test_placeholders_count_as_empty():
+    from scoring.score_cdx_completeness import _is_filled, _present
+    assert not any(_is_filled(v) for v in ("Unknown unknown", "0.0.0", "NOASSERTION", "n/a"))
+    assert _is_filled("1.0.0") and _is_filled("other")       # "other" is only empty as a licence name
+    lic = "licenses[].license.name".split(".")
+    assert not _present({"licenses": [{"license": {"name": "OTHER"}}]}, lic, {})
+    assert _present({"licenses": [{"license": {"name": "other"}}, {"license": {"name": "MIT"}}]}, lic, {})
+
+
+def test_t3_robustness_pairs_and_leave_one_out():
+    from scoring.aggregate import t3_robustness
+    pt = lambda rows: {"metrics": {"per_target": {f"t{i}": dict(zip(("tp", "fp", "fn"), r)) for i, r in enumerate(rows)}}}  # noqa: E731
+    # same pooled F1 (0.5) from opposite targets: Δ = 0, the paired CI spans 0
+    summary = {"aibomgen-cli::T3": pt([(5, 0, 0), (0, 0, 5)]), "cdxgen-aibom::T3": pt([(0, 0, 5), (5, 0, 0)])}
+    pairwise, loto = t3_robustness(summary)
+    assert pairwise[0]["delta_f1"] == 0.0 and pairwise[0]["ci_low"] < 0 < pairwise[0]["ci_high"]
+    assert (pairwise[0]["label_a"], pairwise[0]["label_b"]) == ("aibomgen-cli", "cdxgen (AI-BOM)")   # same names as every table
+    assert (loto[0]["f1_loto_min"], loto[0]["f1_loto_max"]) == (0.0, 1.0)

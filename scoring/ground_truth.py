@@ -18,7 +18,8 @@ A ground-truth file annotates ONE scan target:
       ]
     }
 
-Everything a tool reports that matches none of the three lists is a false positive.
+Everything a tool reports that matches neither ``models`` nor ``neutral`` is a false
+positive (a ``not_models`` hit included).
 """
 
 from __future__ import annotations

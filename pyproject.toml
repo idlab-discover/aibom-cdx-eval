@@ -1,7 +1,7 @@
 [project]
-name = "aibomgen-eval"
+name = "aibom-cdx-eval"
 version = "0.1.0"
-description = "Evaluation and benchmarking framework for aibomgen-cli and peer AIBOM tools"
+description = "AI Bill of Materials CycloneDX evaluation framework for AIBOM generators"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.1",

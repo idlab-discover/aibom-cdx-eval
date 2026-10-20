@@ -3,7 +3,7 @@ score_reliability.py — T2 failure-rate and error-classification metrics.
 
 Classifies the outcome of a tool invocation into one of these categories:
 
-    success               — exit 0 + parseable non-empty output artifact
+    success               — exit 0 + an output artifact (T4 conformance judges its content)
     success_empty         — scan tool ran fine and found nothing (set by the runner)
     timeout               — process killed by timeout (exit_code -9)
     gated_or_unauthorized — 401/403 from the Hub: gated or private model/file

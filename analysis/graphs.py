@@ -3,7 +3,7 @@ analysis/graphs.py — generate publication-ready figures from aggregated result
 
 Reads only <root>/aggregated/data/<run-id>/<run-id>_summary.json, the file the
 tables and the report are built from, so every figure shows the tables' numbers,
-and writes PDF + PNG figures to <root>/aggregated/figures/<run-id>/
+and writes PDF + PNG figures to <root>/aggregated/figures/<run-id>/{pdf,png}/
 (root = --results-dir).
 
 Figures (run type = what the tool was given):
@@ -18,13 +18,13 @@ Figures (run type = what the tool was given):
   fig5c_t4_ai_completeness_model_id / _source_scan      AI-relevant completeness and breadth
 
 Style rules (all figures)
-  * No plot titles — the LaTeX caption provides them.  The only title is a short
-    subtitle naming the run type (and, for T3, the scope).
+  * No plot titles or subtitles — the LaTeX caption provides them.
   * One visual encoding everywhere: colour = tool, shade (dark → light) = metric,
     diagonal hatch = CycloneDX v1.7 (solid = v1.6).  Hatching means nothing else.
-  * One shared legend row below the plot in black/white/grey explains the shades and
-    hatching for every tool (each tool keeps its own colour).  Legends never widen
-    a figure.
+  * One legend row below the plot; legends never widen a figure.  In the grouped-bar
+    figures (4a, 5a-c) it is one shared black/white/grey legend that explains the shades
+    and hatching for every tool (each tool keeps its own colour); fig1-3 and 4b explain
+    their own marks (median/mean/Hub requests, failure classes, tools and claims).
 
 Usage:
     uv run eval aggregate --run-id <run-id>
@@ -50,9 +50,6 @@ from constants import (
     TASK_T1,
     TASK_T2,
     TASK_T3,
-    RUN_MODEL_ID,
-    RUN_SOURCE_SCAN,
-    RUN_TYPE_LABELS,
     T4_RUN_TYPE,
     TOOL_LABELS,
 )
@@ -95,7 +92,6 @@ HATCH_V17 = "///"
 plt.rcParams["hatch.linewidth"] = 1.1
 
 _INK = "#333333"
-_SUBTITLE_INK = "#555555"
 
 # Every figure shows the tools that have data for its task in the summary,
 # in TOOL_ORDER.
@@ -140,9 +136,10 @@ def make_figures(run_id: str, results_root: Path) -> None:
 # ================================================================== #
 
 def _save_figure(fig: plt.Figure, out_dir: Path, stem: str) -> None:
-    """Write a figure to both PDF and PNG outputs."""
+    """Write a figure as <out_dir>/pdf/<stem>.pdf and <out_dir>/png/<stem>.png."""
     for suffix in ("pdf", "png"):
-        fig.savefig(out_dir / f"{stem}.{suffix}", bbox_inches="tight")
+        (out_dir / suffix).mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_dir / suffix / f"{stem}.{suffix}", bbox_inches="tight")
 
 
 def _tick_label(tool: str) -> str:
@@ -156,10 +153,6 @@ def _tick_label(tool: str) -> str:
         else:
             lines.append(line)
     return "\n".join(lines)
-
-
-def _subtitle(ax: Any, text: str) -> None:
-    ax.set_title(text, fontsize=9, color=_SUBTITLE_INK, pad=6)
 
 
 def _label_bars(
@@ -224,10 +217,18 @@ def _legend_patch(s: Series) -> mpatches.Patch:
 
 
 def _shared_legend(fig: plt.Figure, ax: Any, series: list[Series]) -> None:
-    """One compact black/white/grey legend row below the plot, valid for all tools."""
+    """One compact black/white/grey legend row below the plot, valid for all tools,
+    plus an error-bar entry when any series draws one."""
+    handles = [_legend_patch(s) for s in series]
+    err = next((s.err for s in series if s.err), None)
+    if err:
+        # Invisible NaN errorbar: the legend renders it as the same capped whisker as the plot.
+        handles.append(ax.errorbar([np.nan], [np.nan], yerr=[1.0], fmt="none", ecolor=_INK, elinewidth=0.8,
+                                   capsize=2, capthick=0.8,
+                                   label="±1 SD" if err == "std" else "95 % CI"))
     legend = ax.legend(
-        handles=[_legend_patch(s) for s in series],
-        ncol=len(series), loc="upper center",
+        handles=handles,
+        ncol=len(handles), loc="upper center",
         bbox_to_anchor=(0.5, _below_axes_anchor(fig, ax)), frameon=False,
         columnspacing=1.2, handlelength=1.4, handleheight=0.9,
         handletextpad=0.5, fontsize=7,
@@ -269,7 +270,6 @@ def _grouped_bar_figure(
     tools: list[str],
     series: list[Series],
     ylabel: str,
-    subtitle: str,
     figsize: tuple[float, float],
     fmt: Callable[[float], str] | None = None,
     ylim: tuple[float, float] | None = None,
@@ -317,7 +317,6 @@ def _grouped_bar_figure(
     ax.set_xticklabels([_tick_label(t) for t in tools], fontsize=8)
     ax.set_ylabel(ylabel)
     ax.set_ylim(*(ylim if ylim else (0, (max(tops, default=0) or 1.0) * 1.25)))
-    _subtitle(ax, subtitle)
 
     fig.tight_layout()
     _shared_legend(fig, ax, series)
@@ -404,7 +403,6 @@ def _t1_boxplot(
     ax.set_ylabel(ylabel)
     ax.set_xticklabels(box_labels, fontsize=7.5)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:g}{unit}"))
-    _subtitle(ax, RUN_TYPE_LABELS[RUN_MODEL_ID])
 
     med_patch = plt.Line2D([0], [0], color="black", linewidth=1.2, label="Median")
     mean_patch = plt.Line2D([0], [0], marker="x", color="w", markerfacecolor="black",
@@ -502,7 +500,6 @@ def _fig3_t2_reliability(S: dict, out: Path) -> None:
     ax.set_xticklabels([f"{_tick_label(t)}\nN={n}" for t, n in zip(tools, n_models)], fontsize=7.5)
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Share of models")
-    _subtitle(ax, RUN_TYPE_LABELS[RUN_MODEL_ID])
     fig.tight_layout()
     ax.legend(
         handles=[
@@ -534,19 +531,21 @@ _T3_SCOPES = [
 def _fig4_t3_discovery(S: dict, out: Path) -> None:
     """Figure 4a — T3: pooled precision / recall / F1 over all targets.
 
-    Bars are micro (pooled over targets) scores; whiskers are the 95 % bootstrap
-    CI over targets.  Shade = metric (dark F1, mid precision, light recall).
+    Bars are micro (pooled over targets) scores with their value on top (as in 4b),
+    without error bars: the targets are a designed set, not a sample, so the
+    bootstrap CIs live in the T3 table instead.
+    Shade = metric (dark F1, mid precision, light recall).
     """
     tools = tools_for(S, TASK_T3)
     series = [
-        Series("f1",        "F1",        "dark",  err="ci"),
-        Series("precision", "Precision", "mid",   err="ci"),
-        Series("recall",    "Recall",    "light", err="ci"),
+        Series("f1",        "F1",        "dark"),
+        Series("precision", "Precision", "mid"),
+        Series("recall",    "Recall",    "light"),
     ]
     _grouped_bar_figure(
         S, out, "fig4a_t3_discovery", TASK_T3, tools, series,
-        ylabel="Score", subtitle=f"{RUN_TYPE_LABELS[RUN_SOURCE_SCAN]} — all targets",
-        figsize=(5.0, 3.6), ylim=(0, 1.05),
+        ylabel="Score",
+        figsize=(5.0, 3.6), fmt=lambda v: f"{v:.2f}", ylim=(0, 1.12),
     )
     _fig4b_t3_recall_by_scope(S, out, tools)
 
@@ -621,7 +620,6 @@ def _fig4b_t3_recall_by_scope(S: dict, out: Path, tools: list[str]) -> None:
     ax.set_ylim(-0.12, 1.12)
     ax.set_yticks(np.linspace(0, 1, 6))
     ax.spines["left"].set_bounds(0, 1.0)
-    _subtitle(ax, f"{RUN_TYPE_LABELS[RUN_SOURCE_SCAN]} — recall by target scope")
     fig.tight_layout()
 
     tool_handles = [mpatches.Patch(facecolor=PALETTE[t], edgecolor="white", label=TOOL_LABELS[t]) for t in tools]
@@ -658,7 +656,7 @@ def _fig5a_t4_conformance(S: dict, out: Path) -> None:
                 Series("cdx_conformance_pass_rate_v16", "v1.6", "dark"),
                 Series("cdx_conformance_pass_rate_v17", "v1.7", "dark", v17=True),
             ],
-            ylabel="Conformance pass rate", subtitle=RUN_TYPE_LABELS[run_type],
+            ylabel="Conformance pass rate",
             figsize=(5.4, 3.8), fmt=lambda v: f"{v * 100:.1f}%".replace(".0%", "%"),
             ylim=(0, 1.12),
         )
@@ -677,7 +675,7 @@ def _fig5b_t4_completeness(S: dict, out: Path) -> None:
                 Series("cdx_breadth_pct_v16",      "breadth v1.6",      "light"),
                 Series("cdx_breadth_pct_v17",      "breadth v1.7",      "light", v17=True),
             ],
-            ylabel="Schema field coverage (%)", subtitle=RUN_TYPE_LABELS[run_type],
+            ylabel="Schema field coverage (%)",
             figsize=(6.0, 3.8), fmt=lambda v: f"{v:.2f}",
         )
 
@@ -696,7 +694,7 @@ def _fig5c_t4_ai_completeness(S: dict, out: Path) -> None:
                 Series("cdx_ai_breadth_pct_v16",      "breadth v1.6",      "light"),
                 Series("cdx_ai_breadth_pct_v17",      "breadth v1.7",      "light", v17=True),
             ],
-            ylabel="AI-relevant field coverage (%)", subtitle=RUN_TYPE_LABELS[run_type],
+            ylabel="AI-relevant field coverage (%)",
             figsize=(6.0, 3.8), fmt=lambda v: f"{v:.2f}",
         )
 

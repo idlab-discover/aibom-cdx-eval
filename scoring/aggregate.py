@@ -1,7 +1,8 @@
 """
 aggregate.py — cross-tool, cross-task result aggregation.
 
-Reads all metrics.json files of <root>/runs/<run-id>/ and writes to
+Reads every job's run facts (metrics.json) and scores (scores.json, written by
+`eval score`) of <root>/runs/<run-id>/ and writes to
 <root>/aggregated/data/<run-id>/ (root = --results-dir, default results/):
     <run-id>_summary.json            per-tool per-task stats
     <run-id>_t3_*.{json,csv}         T3 tables (paper/report reuse)
@@ -33,6 +34,7 @@ import csv
 import json
 import statistics
 from collections import Counter, defaultdict
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +53,8 @@ from constants import (
     K_CDX_AI_BREADTH_V17,
     K_CDX_AI_COMPLETENESS_V16,
     K_CDX_AI_COMPLETENESS_V17,
+    K_CDX_AI_DETAIL_V16,
+    K_CDX_AI_DETAIL_V17,
     K_CDX_COMPLETENESS_DETAIL_V16,
     K_CDX_COMPLETENESS_DETAIL_V17,
     K_CDX_COMPLETENESS_V16,
@@ -68,6 +72,8 @@ from constants import (
     K_RETRIES_MEAN,
     K_SUCCESS_RATE,
     K_UNIDENTIFIED,
+    METRICS_FILENAME,
+    SCORES_FILENAME,
     TASK_T1,
     TASK_T2,
     TASK_T3,
@@ -81,7 +87,6 @@ from constants import (
     TOOL_ORDER,
 )
 from scoring.ground_truth import ground_truth_path, load_ground_truth
-from scoring.score_cdx_completeness import ai_relevant_detail
 from scoring.score_discovery import match_detections, prf
 
 _BOOTSTRAP_B = 2000
@@ -96,6 +101,8 @@ def aggregate_run(run_id: str, results_root: Path) -> Path:
     click.echo(f"Loaded {len(records)} result records from run {run_id}")
 
     summary = _build_summary(records, baselines=_load_baselines(run_dir))
+    # Which scorer produced the numbers (framework commit of every `eval score` used).
+    summary["_scoring"] = {"framework_commits": sorted({str(r["_scoring_commit"]) for r in records})}
 
     data_dir = results_root / "aggregated" / "data" / run_id
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -115,15 +122,30 @@ def aggregate_run(run_id: str, results_root: Path) -> Path:
 # ------------------------------------------------------------------ #
 
 def _load_all_metrics(run_dir: Path) -> list[dict[str, Any]]:
+    """Every job's run facts joined with its scores (``rec["scores"]``).  Refuses a run
+    with a job that is not scored, or whose scores belong to an earlier run of that job
+    (it was re-run after `eval score`): aggregating it would silently mix scorers."""
     records = []
-    for metrics_file in run_dir.rglob("metrics.json"):
+    unscored = 0
+    for metrics_file in sorted(run_dir.rglob(METRICS_FILENAME)):
+        rec = json.loads(metrics_file.read_text())
+        # shortcut: runs from before `eval score` (eval-001/002) kept hub_requests inside
+        # metrics.json's scores; drop this line once those runs are no longer aggregated.
+        rec.setdefault(K_HUB_REQUESTS, (rec.get("scores") or {}).get(K_HUB_REQUESTS))
         try:
-            with open(metrics_file) as f:
-                rec = json.load(f)
-        except Exception:
+            scored = json.loads(metrics_file.with_name(SCORES_FILENAME).read_text())
+        except (OSError, ValueError):
+            scored = None
+        if not scored or scored.get("timestamp_end") != rec.get("timestamp_end"):
+            unscored += 1
             continue
-        rec["scores"] = rec.get("scores") or {}
+        rec["scores"] = scored.get("scores") or {}
+        rec["_scoring_commit"] = scored.get("framework_commit")
         records.append(rec)
+    if unscored:
+        raise click.ClickException(
+            f"{unscored} of {unscored + len(records)} jobs are not scored or were re-run since "
+            f"scoring: run `uv run eval score --run-id {run_dir.name}` first")
     return records
 
 
@@ -240,7 +262,7 @@ def _aggregate_t1(summary: dict, records: list[dict], baselines: dict[str, float
             thr = (r.get("scores") or {}).get(K_NORMALIZED_THROUGHPUT)
             if isinstance(thr, (int, float)):
                 per_model_thr[spec].append(float(thr))
-            hub = (r.get("scores") or {}).get(K_HUB_REQUESTS)
+            hub = r.get(K_HUB_REQUESTS)
             if isinstance(hub, (int, float)) and hub >= 0:   # older runs stored impossible negatives
                 per_model_hub[spec].append(float(hub))
 
@@ -376,7 +398,7 @@ def _bootstrap_micro_ci(items: list[tuple[int, int, int]]) -> dict[str, tuple[fl
     with np.errstate(divide="ignore", invalid="ignore"):
         precision = np.where(tp + fp > 0, tp / (tp + fp), np.nan)
         recall = np.where(tp + fn > 0, tp / (tp + fn), np.nan)
-        f1 = np.where(tp > 0, 2 * precision * recall / (precision + recall), 0.0)
+    f1 = _micro_f1(tp, fp, fn)
     out = dict(empty)
     for name, vals in (("precision", precision), ("recall", recall), ("f1", f1)):
         vals = vals[~np.isnan(vals)]
@@ -483,6 +505,57 @@ def _write_t3_tables(data_dir: Path, run_id: str, summary: dict[str, Any]) -> No
             caption=f"T3 model discovery — {'all targets' if scope == 'full' else scope + ' targets'}",
             scope=scope,
         )
+    pairwise, loto = t3_robustness(summary)
+    for name, rows in (("t3_pairwise", pairwise), ("t3_loto", loto)):
+        _csv(data_dir / f"{run_id}_{name}.csv", rows)
+        if rows:
+            click.echo(f"Table ({name}) → {data_dir / f'{run_id}_{name}.csv'}")
+
+
+def _micro_f1(tp: Any, fp: Any, fn: Any) -> Any:
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(tp > 0, 2 * tp / (2 * tp + fp + fn), 0.0)
+
+
+def t3_robustness(summary: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    """How much the T3 ranking can be trusted, from the stored per-target TP/FP/FN.
+
+    pairwise: micro-F1 difference of every tool pair with a PAIRED 95 % bootstrap CI
+      (both tools get the same resampled targets) and P(Δ ≤ 0).
+    loto: each tool's micro F1 with one target left out (min/max, and the target
+      whose removal moves it most).
+    """
+    per_target = {t: summary[f"{t}::{TASK_T3}"]["metrics"]["per_target"] for t in tools_for(summary, TASK_T3)}
+    pairwise = []
+    for a, b in combinations(per_target, 2):
+        common = sorted(set(per_target[a]) & set(per_target[b]))
+        if len(common) < 2:
+            continue
+        arr = {t: np.asarray([[per_target[t][d][k] for k in ("tp", "fp", "fn")] for d in common], dtype=float)
+               for t in (a, b)}
+        idx = np.random.default_rng(_BOOTSTRAP_SEED).integers(0, len(common), size=(_BOOTSTRAP_B, len(common)))
+        diff = _micro_f1(*arr[a][idx].sum(axis=1).T) - _micro_f1(*arr[b][idx].sum(axis=1).T)
+        lo, hi = np.percentile(diff, [2.5, 97.5])
+        pairwise.append({
+            "tool_a": a, "tool_b": b, "label_a": TOOL_LABELS.get(a, a), "label_b": TOOL_LABELS.get(b, b),
+            "delta_f1": round(float(_micro_f1(*arr[a].sum(axis=0)) - _micro_f1(*arr[b].sum(axis=0))), 4),
+            "ci_low": round(float(lo), 4), "ci_high": round(float(hi), 4),
+            "p_delta_le_0": round(float(np.mean(diff <= 0)), 4), "n_targets": len(common),
+        })
+    loto = []
+    for tool, targets in per_target.items():
+        if len(targets) < 2:
+            continue
+        tot = np.asarray([[v[k] for k in ("tp", "fp", "fn")] for v in targets.values()], dtype=float)
+        full = float(_micro_f1(*tot.sum(axis=0)))
+        without = {d: float(_micro_f1(*(tot.sum(axis=0) - row))) for d, row in zip(targets, tot)}
+        most = max(without, key=lambda d: abs(without[d] - full))
+        loto.append({
+            "tool": tool, "label": TOOL_LABELS.get(tool, tool), "f1": round(full, 4),
+            "f1_loto_min": round(min(without.values()), 4), "f1_loto_max": round(max(without.values()), 4),
+            "most_influential_target": most, "f1_without_it": round(without[most], 4),
+        })
+    return pairwise, loto
 
 
 def _t3_row(summary: dict[str, Any], tool: str, scope: str) -> dict[str, Any] | None:
@@ -586,6 +659,10 @@ def _t2_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _pct_of(share: float | None) -> float | None:
+    return None if share is None else round(share * 100, 2)
+
+
 def _t4_rows(summary: dict[str, Any], task: str) -> list[dict[str, Any]]:
     def mean(m: dict, key: str, field: str = "mean") -> float | None:
         v = m.get(key)
@@ -600,7 +677,9 @@ def _t4_rows(summary: dict[str, Any], task: str) -> list[dict[str, Any]]:
             "runs": e["total_runs"], "scored": e["n_scored"], "no_bom": e["n_no_bom"],
             "with_model": e.get("n_with_model"),
             "n_inputs": mean(m, K_CDX_COMPLETENESS_V16, "n_inputs"),
-            "conformance_v16": m.get(K_CDX_CONFORMANCE_PASS_V16), "conformance_v17": m.get(K_CDX_CONFORMANCE_PASS_V17),
+            # in %, like every other T4 column (the summary keeps the 0-1 pass rate)
+            "conformance_v16_pct": _pct_of(m.get(K_CDX_CONFORMANCE_PASS_V16)),
+            "conformance_v17_pct": _pct_of(m.get(K_CDX_CONFORMANCE_PASS_V17)),
             "completeness_v16": mean(m, K_CDX_COMPLETENESS_V16), "completeness_v16_sd": mean(m, K_CDX_COMPLETENESS_V16, "std"),
             "completeness_v17": mean(m, K_CDX_COMPLETENESS_V17), "completeness_v17_sd": mean(m, K_CDX_COMPLETENESS_V17, "std"),
             "ai_completeness_v16": mean(m, K_CDX_AI_COMPLETENESS_V16),
@@ -632,7 +711,7 @@ def _fmt(v: Any) -> str:
     if v is None:
         return "–"
     if isinstance(v, float):
-        return f"{v:.3f}".rstrip("0").rstrip(".") if abs(v) < 100 else f"{v:.1f}"
+        return (f"{v:.3f}" if abs(v) < 100 else f"{v:.1f}").rstrip("0").rstrip(".")
     return str(v)
 
 
@@ -669,16 +748,26 @@ def _write_report(data_dir: Path, run_id: str, summary: dict[str, Any]) -> None:
         ("n_targets", "Targets")]))
     parts.append("Unidentified = model entries that name no model (e.g. an import or API-call "
                  "detection); reported, not counted as TP or FP.\n\n")
+    pairwise, loto = t3_robustness(summary)
+    parts.append(_md_table("T3: paired F1 differences (95 % paired bootstrap over targets)", pairwise, [
+        ("label_a", "Tool A"), ("label_b", "Tool B"), ("delta_f1", "ΔF1 (A − B)"),
+        ("ci_low", "CI low"), ("ci_high", "CI high"), ("p_delta_le_0", "P(Δ ≤ 0)")]))
+    parts.append(_md_table("T3: leave-one-target-out F1", loto, [
+        ("label", "Tool"), ("f1", "F1"), ("f1_loto_min", "Min"), ("f1_loto_max", "Max"),
+        ("most_influential_target", "Most influential target"), ("f1_without_it", "F1 without it")]))
+    parts.append("A ranking between two tools is only supported when their paired CI excludes 0.\n\n")
     t4_cols = [
         ("label", "Tool"), ("scored", "BOMs scored"), ("no_bom", "No BOM"),
-        ("conformance_v16", "Conf. v1.6"), ("conformance_v17", "Conf. v1.7"),
-        ("completeness_v16", "Compl. v1.6"), ("completeness_v16_sd", "± SD"),
+        ("conformance_v16_pct", "Conf. v1.6 (%)"), ("conformance_v17_pct", "Conf. v1.7 (%)"),
+        ("completeness_v16", "Compl. v1.6 (%)"), ("completeness_v16_sd", "± SD"),
         ("with_model", "BOMs w/ model"),
-        ("ai_completeness_v16", "AI compl. v1.6"), ("ai_completeness_v16_sd", "± SD"),
-        ("ai_breadth_v16", "AI breadth v1.6"),
-        ("breadth_v16", "Breadth v1.6")]
+        ("ai_completeness_v16", "AI compl. v1.6 (%)"), ("ai_completeness_v16_sd", "± SD"),
+        ("ai_breadth_v16", "AI breadth v1.6 (%)"),
+        ("breadth_v16", "Breadth v1.6 (%)")]
     for task, run_type in T4_RUN_TYPE.items():
         parts.append(_md_table(f"T4: CycloneDX quality ({RUN_TYPE_LABELS[run_type]})", _t4_rows(summary, task), t4_cols))
+    parts.append("BOMs scored = runs with a BOM. No BOM = source scans that wrote none (empty or failed); "
+                 "a failed model-ID run is a T2 failure and is in neither column.\n")
     path = data_dir / f"{run_id}_report.md"
     path.write_text("".join(parts))
     click.echo(f"Report → {path}")
@@ -759,35 +848,13 @@ def _has_model(record: dict) -> bool:
     return isinstance(v, (int, float)) and v > 0
 
 
-_AI_VERSIONS = (  # (full detail, AI pct, in-memory AI detail)
-    (K_CDX_COMPLETENESS_DETAIL_V16, K_CDX_AI_COMPLETENESS_V16, "ai_detail_v16"),
-    (K_CDX_COMPLETENESS_DETAIL_V17, K_CDX_AI_COMPLETENESS_V17, "ai_detail_v17"),
-)
-
-
-def _ai_record(record: dict) -> dict:
-    """AI-relevant completeness of one run, derived from its stored full-BOM detail;
-    an empty scan (no BOM) gets 0 and no detail."""
-    scores: dict[str, Any] = {}
-    for detail_k, pct_k, ai_detail_k in _AI_VERSIONS:
-        detail = record.get("scores", {}).get(detail_k)
-        ai = ai_relevant_detail(detail) if isinstance(detail, dict) else {}
-        if ai:
-            scores[pct_k] = round(sum(ai.values()) / len(ai) * 100, 4)
-            scores[ai_detail_k] = ai
-        else:
-            scores[pct_k] = 0.0
-    return {"input_spec": record.get("input_spec", ""), "scores": scores}
-
-
 def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
     """T4 for every CDX-producing tool.  ``total_runs`` counts ALL runs of the tool;
     runs that emitted no BOM (an empty scan; for source scans also a failed one) are
-    reported as ``n_no_bom`` and are not scored, except for AI-relevant completeness:
-    there they count as 0, so every scanner is averaged over every target whether it
-    writes no BOM because it found nothing or because it failed.  AI-relevant completeness / breadth = completeness / breadth
-    over the AI_RELEVANT_SECTIONS paths only, derived from the stored per-path
-    detail.
+    reported as ``n_no_bom`` and are not scored: T4 rates the BOMs a tool wrote, and
+    finding nothing is already penalised by T3 recall.  AI-relevant completeness /
+    breadth come from the scorer's per-BOM AI-relevant pct / detail (see
+    score_cdx_completeness._ai_view).
     ``n_with_model`` = BOMs that contain a model component."""
     by_tool: dict[str, list[dict]] = defaultdict(list)
     for r in all_records:
@@ -798,11 +865,9 @@ def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
         if not recs:
             continue
         scores = [r.get("scores", {}) for r in recs]
-        # Source scans: every target counts, so a scan without a BOM (empty OR failed)
-        # scores 0, as it counts as zero detections in T3.
+        # Source scans: a scan without a BOM (empty OR failed) is one of n_no_bom.
         empty = [r for r in all_recs if not _has_cdx(r) and (
             task == TASK_T4_SOURCE_SCAN or r.get("scores", {}).get(K_ERROR_CLASS) == EC_SUCCESS_EMPTY)]
-        ai_recs = [_ai_record(r) for r in recs + empty]
 
         v16_valid = [s[K_CDX_CONFORMANCE_VALID_V16] for s in scores
                      if s.get(K_CDX_CONFORMANCE_VALID_V16) is not None]
@@ -819,12 +884,12 @@ def _aggregate_cdx(summary: dict, task: str, all_records: list[dict]) -> None:
             "metrics": {
                 K_CDX_COMPLETENESS_V16:     _per_input_stats(recs, K_CDX_COMPLETENESS_V16),
                 K_CDX_BREADTH_V16:          _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V16),
-                K_CDX_AI_COMPLETENESS_V16:  _per_input_stats(ai_recs, K_CDX_AI_COMPLETENESS_V16),
-                K_CDX_AI_BREADTH_V16:       _agg_cdx_breadth(ai_recs, "ai_detail_v16"),
+                K_CDX_AI_COMPLETENESS_V16:  _per_input_stats(recs, K_CDX_AI_COMPLETENESS_V16),
+                K_CDX_AI_BREADTH_V16:       _agg_cdx_breadth(recs, K_CDX_AI_DETAIL_V16),
                 K_CDX_COMPLETENESS_V17:     _per_input_stats(recs, K_CDX_COMPLETENESS_V17),
                 K_CDX_BREADTH_V17:          _agg_cdx_breadth(recs, K_CDX_COMPLETENESS_DETAIL_V17),
-                K_CDX_AI_COMPLETENESS_V17:  _per_input_stats(ai_recs, K_CDX_AI_COMPLETENESS_V17),
-                K_CDX_AI_BREADTH_V17:       _agg_cdx_breadth(ai_recs, "ai_detail_v17"),
+                K_CDX_AI_COMPLETENESS_V17:  _per_input_stats(recs, K_CDX_AI_COMPLETENESS_V17),
+                K_CDX_AI_BREADTH_V17:       _agg_cdx_breadth(recs, K_CDX_AI_DETAIL_V17),
                 K_CDX_CONFORMANCE_PASS_V16: pass_rate(v16_valid),
                 K_CDX_CONFORMANCE_PASS_V17: pass_rate(v17_valid),
             },

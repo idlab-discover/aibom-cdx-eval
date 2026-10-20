@@ -1,5 +1,5 @@
 # ============================================================
-# aibomgen-cli evaluation framework — orchestrator configuration
+# AIBOM-CDX-Eval — orchestrator configuration
 # ============================================================
 #
 # Run types (what a tool is given):
@@ -18,8 +18,9 @@
 # ============================================================
 
 run:
-  # Passed to every runner (see orchestrator._build_jobs). A tool block may override any of these.
-  max_retries: 5              # transient failures only; gated (401/403) jobs are never retried
+  # max_retries .. hub_min_remaining are passed to every runner (orchestrator _tool_config); a
+  # tool block may override them. default_dataset_limit and baseline_samples are for the orchestrator.
+  max_retries: 5              # every failure except gated (401/403) and timeouts (methodology.md, Retries)
   retry_delay_seconds: 30      # doubles per retry: 30, 60, 120, 240, 480 s
   timeout_seconds: 1800
   retry_on_timeout: false      # a timed-out job is recorded as a failure, not retried
@@ -27,8 +28,10 @@ run:
   # resolvers 5000.  Before every model-id job (and before a retry) the runner reads all four
   # counters from the Hub's `ratelimit` header and waits for the window reset if any has fewer
   # than this left; it reads them again after the job and stores the difference as the job's
-  # `hub_requests`.  200 covers the heaviest job seen (OWASP aibom-generator: up to 182 requests).
-  # ponytail: the probes cost 8 requests/job (~2 per bucket), a few % of each budget.
+  # `hub_requests` (summed over the four buckets; the heaviest job, lab700xorg-aisbom at up
+  # to 491, is mostly resolver/file requests from the 5000 budget).  It can't go much higher:
+  # the anonymous api bucket holds only 500, and probes + ALOHA use ~250 of it per window.
+  # shortcut: the probes cost 8 requests/job (~2 per bucket), a few % of each budget; batch them if a budget gets tight.
   hub_min_remaining: 200
   default_dataset_limit: 100
   baseline_samples: 5          # no-op invocations timed per tool to estimate process start-up cost

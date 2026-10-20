@@ -138,6 +138,30 @@
       "id": "dslim/bert-base-NER",
       "scope": "notebook_literal",
       "file": "notebooks/exploration.ipynb"
+    },
+    {
+      "id": "./checkpoints/my-finetuned-model",
+      "scope": "python_literal",
+      "file": "src/train.py",
+      "pattern": "local checkpoint path"
+    },
+    {
+      "id": "/mnt/models/llama-8b",
+      "scope": "python_literal",
+      "file": "src/train.py",
+      "pattern": "local checkpoint path"
+    },
+    {
+      "id": "../weights/checkpoint-500",
+      "scope": "python_literal",
+      "file": "src/train.py",
+      "pattern": "local checkpoint path"
+    },
+    {
+      "id": "./checkpoints/step-1000",
+      "scope": "notebook_literal",
+      "file": "notebooks/exploration.ipynb",
+      "pattern": "local checkpoint path"
     }
   ],
   "neutral": [
@@ -173,26 +197,6 @@
       ],
       "reason": "legacy single-segment _name_or_path in a config file (provenance, not usage)",
       "file": "config/model_config.json"
-    },
-    {
-      "id": "./checkpoints/my-finetuned-model",
-      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
-      "file": "src/train.py"
-    },
-    {
-      "id": "/mnt/models/llama-8b",
-      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
-      "file": "src/train.py"
-    },
-    {
-      "id": "../weights/checkpoint-500",
-      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
-      "file": "src/train.py"
-    },
-    {
-      "id": "./checkpoints/step-1000",
-      "reason": "local checkpoint path loaded as a model (a real model, but not a Hub ID)",
-      "file": "notebooks/exploration.ipynb"
     }
   ],
   "not_models": [

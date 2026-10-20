@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "aibomgen-eval"
+name = "aibom-cdx-eval"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -7,9 +7,9 @@ re-scored at aggregation time from the stored ``detected_ids``.
 Matching rules (org-aware, case-insensitive):
   1. A detection matches a ground-truth entry when it equals the entry's ``id``
      or one of its ``aliases`` (the literal as written in the source).
-  2. A name-only match is allowed ONLY when the ground-truth id itself has no
-     org (e.g. ``gpt-4o``): ``openai/gpt-4o`` then matches ``gpt-4o``.  A
-     detection without an org never matches a ground-truth id that has one.
+  2. Name-only matches work both ways: ``openai/gpt-4o`` matches a ground-truth
+     ``gpt-4o``, and a detection without an org (``Mistral-7B-v0.3``) matches
+     ``mistralai/Mistral-7B-v0.3`` when exactly one counted entry has that name.
   3. Each ground-truth entry is consumed once; repeated detections of it are
      ignored (not a second TP, not an FP).
   4. Detections that match a ``neutral`` entry are ignored (not TP, not FP).
@@ -49,6 +49,10 @@ def _find_entry(det: str, entries: list[GTEntry]) -> GTEntry | None:
         for e in entries:
             if any("/" not in k and k == name for k in e.keys):
                 return e
+    else:
+        named = [e for e in entries if any(_name_only(k) == det for k in e.keys)]
+        if len(named) == 1:     # an ambiguous bare name matches nothing
+            return named[0]
     return None
 
 

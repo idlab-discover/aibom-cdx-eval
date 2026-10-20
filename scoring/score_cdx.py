@@ -7,8 +7,8 @@ all of its BOMs:
 
   * conformance  — valid only if EVERY BOM validates; errors are prefixed with
                    the file name
-  * completeness — mean over the BOMs (full-BOM and model-component variants)
-  * detail       — OR-union of the per-BOM path maps (feeds breadth)
+  * completeness — mean over the BOMs (full-BOM, model-component and AI-relevant variants)
+  * detail       — OR-union of the per-BOM path maps (full and AI-relevant; feed breadth)
 """
 
 from __future__ import annotations
@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from constants import (
+    K_CDX_AI_COMPLETENESS_V16,
+    K_CDX_AI_COMPLETENESS_V17,
+    K_CDX_AI_DETAIL_V16,
+    K_CDX_AI_DETAIL_V17,
     K_CDX_COMPLETENESS_DETAIL_V16,
     K_CDX_COMPLETENESS_DETAIL_V17,
     K_CDX_COMPLETENESS_V16,
@@ -35,9 +39,11 @@ K_CDX_BOM_COUNT = "cdx_bom_count"
 
 _VERSIONS = (
     (K_CDX_CONFORMANCE_VALID_V16, K_CDX_CONFORMANCE_ERRORS_V16, K_CDX_COMPLETENESS_V16,
-     K_CDX_MODEL_COMPLETENESS_V16, K_CDX_COMPLETENESS_DETAIL_V16),
+     K_CDX_MODEL_COMPLETENESS_V16, K_CDX_COMPLETENESS_DETAIL_V16,
+     K_CDX_AI_COMPLETENESS_V16, K_CDX_AI_DETAIL_V16),
     (K_CDX_CONFORMANCE_VALID_V17, K_CDX_CONFORMANCE_ERRORS_V17, K_CDX_COMPLETENESS_V17,
-     K_CDX_MODEL_COMPLETENESS_V17, K_CDX_COMPLETENESS_DETAIL_V17),
+     K_CDX_MODEL_COMPLETENESS_V17, K_CDX_COMPLETENESS_DETAIL_V17,
+     K_CDX_AI_COMPLETENESS_V17, K_CDX_AI_DETAIL_V17),
 )
 
 
@@ -51,7 +57,7 @@ def score_cdx_paths(paths: list[Path]) -> dict[str, Any]:
     comp = [score_cdx_completeness(p) for p in paths]
     out: dict[str, Any] = {K_CDX_BOM_COUNT: len(paths)}
 
-    for valid_k, err_k, pct_k, model_k, detail_k in _VERSIONS:
+    for valid_k, err_k, pct_k, model_k, detail_k, ai_k, ai_detail_k in _VERSIONS:
         valids = [c.get(valid_k) for c in conf]
         if any(v is None for v in valids):
             out[valid_k], out[err_k] = None, None
@@ -62,17 +68,18 @@ def score_cdx_paths(paths: list[Path]) -> dict[str, Any]:
                 for p, c in zip(paths, conf) for e in (c.get(err_k) or [])
             ]
 
-        for key in (pct_k, model_k):
+        for key in (pct_k, model_k, ai_k):
             vals = [c[key] for c in comp if isinstance(c.get(key), (int, float))]
             out[key] = round(sum(vals) / len(vals), 4) if vals else None
 
-        details = [c[detail_k] for c in comp if isinstance(c.get(detail_k), dict)]
-        if details:
-            merged: dict[str, bool] = {}
-            for d in details:
-                for path, filled in d.items():
-                    merged[path] = merged.get(path, False) or bool(filled)
-            out[detail_k] = merged
-        else:
-            out[detail_k] = None
+        for key in (detail_k, ai_detail_k):
+            details = [c[key] for c in comp if isinstance(c.get(key), dict)]
+            if details:
+                merged: dict[str, bool] = {}
+                for d in details:
+                    for path, filled in d.items():
+                        merged[path] = merged.get(path, False) or bool(filled)
+                out[key] = merged
+            else:
+                out[key] = None
     return out

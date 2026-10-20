@@ -42,7 +42,7 @@ def _validator(key: str) -> jsonschema.Draft7Validator:
     registry: Registry = Registry()
     for path in SCHEMA_DIR.glob("*.schema.json"):
         contents = json.loads(path.read_text())
-        if "$id" in contents:                  # result.schema.json (ours) has none
+        if "$id" in contents:
             registry = registry.with_resource(contents["$id"], Resource.from_contents(contents))
     schema = json.loads(_SCHEMAS[key].read_text())
     return jsonschema.Draft7Validator(schema, registry=registry)
@@ -81,7 +81,9 @@ def score_cdx_conformance(output_path: Path) -> dict[str, Any]:
     try:
         instance = json.loads(output_path.read_text())
     except Exception:
-        return null_result
+        # A BOM that was written but can't be read is non-conformant, not missing.
+        return {K_CDX_CONFORMANCE_VALID_V16: False, K_CDX_CONFORMANCE_ERRORS_V16: ["unparseable JSON"],
+                K_CDX_CONFORMANCE_VALID_V17: False, K_CDX_CONFORMANCE_ERRORS_V17: ["unparseable JSON"]}
 
     result: dict[str, Any] = {}
     for key, valid_k, errors_k in [

@@ -24,7 +24,8 @@ CONFIG_PATH    = EVAL_ROOT / "orchestrator" / "config.yaml"
 
 # ── File names ─────────────────────────────────────────────────────────────
 
-METRICS_FILENAME     = "metrics.json"
+METRICS_FILENAME     = "metrics.json"     # run facts, written once by `eval run`
+SCORES_FILENAME      = "scores.json"      # scores, (re)written by `eval score`
 JOB_INDEX_FILENAME   = "job_index.json"
 
 # ── Run types (what a tool is given; stored as `run_type` in metrics.json) ──
@@ -66,8 +67,6 @@ EC_MISSING_OUTPUT        = "missing_output"
 # ── Metric key names ───────────────────────────────────────────────────────
 
 K_NORMALIZED_THROUGHPUT       = "normalized_throughput"
-K_FIELDS_PRESENT              = "fields_present"
-K_OUTPUT_SIZE_BYTES           = "output_size_bytes"
 K_ERROR_CLASS                 = "error_class"
 K_SUCCESS_RATE                = "success_rate"
 K_FAILURE_RATE                = "failure_rate"
@@ -87,6 +86,8 @@ K_CDX_AI_COMPLETENESS_V16     = "cdx_ai_completeness_pct_v16"   # AI-relevant fi
 K_CDX_AI_COMPLETENESS_V17     = "cdx_ai_completeness_pct_v17"
 K_CDX_AI_BREADTH_V16          = "cdx_ai_breadth_pct_v16"
 K_CDX_AI_BREADTH_V17          = "cdx_ai_breadth_pct_v17"
+K_CDX_AI_DETAIL_V16           = "cdx_ai_detail_v16"   # AI-relevant path -> filled (feeds AI breadth)
+K_CDX_AI_DETAIL_V17           = "cdx_ai_detail_v17"
 K_CDX_CONFORMANCE_VALID_V16   = "cdx_conformance_valid_v16"
 K_CDX_CONFORMANCE_VALID_V17   = "cdx_conformance_valid_v17"
 K_CDX_CONFORMANCE_ERRORS_V16  = "cdx_conformance_errors_v16"

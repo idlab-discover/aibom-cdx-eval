@@ -6,7 +6,7 @@ Run types:
           (cdxgen resolves a Hugging Face purl from Hub metadata; see
           lib/helpers/huggingfaceUtils.js normalizeHuggingFaceReference).  For a
           model it cannot resolve it still exits 0 with a BOM that has no
-          components, so a model-id BOM without a model component is no output.
+          components; like every tool's valid BOM, that counts as success.
   source-scan — `aibom <source_dir> -o <output_file> --no-install-deps`
           (the `aibom` command of @cyclonedx/cdxgen sets project type `ai` and the
           AI-BOM audit defaults; see bin/cdxgen.js and lib/cli/cliOptions.js)
@@ -56,22 +56,10 @@ class CdxgenAibomRunner(BaseRunner):
 
     def locate_output(self, output_dir: Path) -> Path | None:
         p = output_dir / _OUTPUT
-        if not p.exists():
-            return None
-        if self.run_type == RUN_MODEL_ID and not has_model_component(p):
-            return None
-        return p
+        return p if p.exists() else None
 
     @classmethod
     def cdx_output_paths(cls, tool_output_dir: Path) -> list[Path]:
         p = tool_output_dir / _OUTPUT
         return [p] if p.exists() else []
 
-
-def has_model_component(path: Path) -> bool:
-    """True if the BOM has a `machine-learning-model` component (unreadable → False)."""
-    try:
-        bom = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return False
-    return any(c.get("type") == "machine-learning-model" for c in bom.get("components") or [])
